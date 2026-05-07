@@ -1,0 +1,22 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Logos et images produits — lecture publique, écriture si connecté
+    match /products/{allPaths=**} {
+      allow read:  if true;
+      allow write: if request.auth != null;
+    }
+
+    // Logo boutique
+    match /logo/{fileName} {
+      allow read:  if true;
+      allow write: if request.auth != null;
+    }
+
+    // Tout le reste — utilisateur connecté seulement
+    match /{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

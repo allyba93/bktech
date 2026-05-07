@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Safe role lookup — returns null if document doesn't exist at users/{uid}
+    function getRole() {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(userPath) ? get(userPath).data.role : null;
+    }
+
+    function isOwner() {
+      return isAuth() && getRole() == 'owner';
+    }
+
+    function isCaissier() {
+      return isAuth() && (getRole() == 'owner' || getRole() == 'caissier');
+    }
+
+    // Users — any authenticated user can read; owner can write; user can write own doc
+    match /users/{userId} {
+      allow read:  if isAuth();
+      allow write: if isOwner() || (isAuth() && request.auth.uid == userId);
+    }
+
+    // Products
+    match /products/{productId} {
+      allow read:  if isAuth();
+      allow write: if isOwner();
+
+      match /models/{modelId} {
+        allow read:  if isAuth();
+        allow write: if isOwner();
+
+        match /refs/{refId} {
+          allow read:  if isAuth();
+          allow write: if isCaissier();
+        }
+      }
+    }
+
+    // Categories
+    match /categories/{categoryId} {
+      allow read:  if isAuth();
+      allow write: if isOwner();
+    }
+
+    // Clients
+    match /clients/{clientId} {
+      allow read, write: if isAuth();
+    }
+
+    // Fournisseurs (suppliers)
+    match /fournisseurs/{fournId} {
+      allow read:  if isAuth();
+      allow write: if isOwner();
+    }
+
+    // Legacy supplier collection name (keep for backwards compatibility)
+    match /suppliers/{supplierId} {
+      allow read:  if isAuth();
+      allow write: if isOwner();
+    }
+
+    // Sales
+    match /sales/{saleId} {
+      allow read, write: if isAuth();
+    }
+
+    // Cash movements
+    match /cashMvts/{movId} {
+      allow read, write: if isAuth();
+    }
+
+    // Anonymous sales (comptoir)
+    match /ventesComptoir/{id} {
+      allow read, write: if isAuth();
+    }
+
+    // Epargne / fond movements
+    match /epargneMvts/{id} {
+      allow read, write: if isAuth();
+    }
+
+    // Dettes diverses
+    match /dettesDiverses/{id} {
+      allow read, write: if isAuth();
+    }
+
+    // Settings (caisse ouverture, boutiqueFermee, epargne solde)
+    match /settings/{settingId} {
+      allow read, write: if isAuth();
+    }
+
+    // Legacy collection names (keep for backwards compatibility)
+    match /cashMovements/{movId} {
+      allow read, write: if isAuth();
+    }
+    match /stockMovements/{movId} {
+      allow read, write: if isAuth();
+    }
+    match /dayClosings/{closingId} {
+      allow read, write: if isAuth();
+    }
+  }
+}

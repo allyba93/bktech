@@ -1,0 +1,29 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "sales",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date",      "order": "DESCENDING" },
+        { "fieldPath": "clientId",  "order": "ASCENDING"  }
+      ]
+    },
+    {
+      "collectionGroup": "cashMovements",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date", "order": "DESCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING"  }
+      ]
+    },
+    {
+      "collectionGroup": "stockMovements",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date",      "order": "DESCENDING" },
+        { "fieldPath": "productId", "order": "ASCENDING"  }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
