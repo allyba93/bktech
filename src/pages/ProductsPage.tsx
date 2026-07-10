@@ -17,20 +17,20 @@ const newId = () => 'r' + Date.now() + Math.random().toString(36).slice(2)
 const fmt = (n: number) => n.toLocaleString('fr-FR')
 
 // ── Form types ─────────────────────────────────────────────────────────────
-interface FormRef { _id: string; name: string }
+interface FormRef { _id: string; name: string; prixVente: string }
 interface FormState { name: string; category: string; refs: FormRef[] }
 
 const emptyForm = (): FormState => ({
   name: '',
   category: CATS[0],
-  refs: [{ _id: newId(), name: '' }],
+  refs: [{ _id: newId(), name: '', prixVente: '' }],
 })
 
 function productToForm(p: Product): FormState {
   return {
     name: p.name,
     category: p.category,
-    refs: p.refs.map(r => ({ _id: r.id, name: r.name })),
+    refs: p.refs.map(r => ({ _id: r.id, name: r.name, prixVente: r.prixVente > 0 ? String(r.prixVente) : '' })),
   }
 }
 
@@ -127,20 +127,21 @@ function FormModal({
     setForm(f => ({ ...f, [k]: v }))
 
   const addRef = () =>
-    setForm(f => ({ ...f, refs: [...f.refs, { _id: newId(), name: '' }] }))
+    setForm(f => ({ ...f, refs: [...f.refs, { _id: newId(), name: '', prixVente: '' }] }))
 
   const removeRef = (id: string) =>
     setForm(f => ({ ...f, refs: f.refs.filter(r => r._id !== id) }))
 
-  const updateRef = (id: string, value: string) =>
+  const updateRef = (id: string, field: 'name' | 'prixVente', value: string) =>
     setForm(f => ({
       ...f,
-      refs: f.refs.map(r => (r._id === id ? { ...r, name: value } : r)),
+      refs: f.refs.map(r => (r._id === id ? { ...r, [field]: value } : r)),
     }))
 
   const handleSave = async () => {
     if (!form.name.trim()) { setError('Le nom est requis'); return }
     if (form.refs.some(r => !r.name.trim())) { setError('Chaque référence doit avoir un nom'); return }
+    if (form.refs.some(r => !r.prixVente.trim() || parseFloat(r.prixVente) <= 0)) { setError('Chaque référence doit avoir un prix de vente'); return }
     setError('')
     setSaving(true)
     try {
@@ -228,7 +229,15 @@ function FormModal({
                     className="flex-1 rounded-[9px] border border-black/[0.1] bg-[#f8f7f3] px-3 py-1.5 text-[12px] text-[#111110] outline-none focus:border-[#1a1a18] placeholder:text-[#a8a7a2]"
                     placeholder="Nom de la référence"
                     value={r.name}
-                    onChange={e => updateRef(r._id, e.target.value)}
+                    onChange={e => updateRef(r._id, 'name', e.target.value)}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    className={`w-24 rounded-[9px] border bg-[#f8f7f3] px-2 py-1.5 text-[12px] text-[#111110] outline-none focus:border-[#1a1a18] placeholder:text-[#a8a7a2] text-right font-mono ${!r.prixVente || parseFloat(r.prixVente) <= 0 ? 'border-[#e8a87c]' : 'border-black/[0.1]'}`}
+                    placeholder="Prix vente"
+                    value={r.prixVente}
+                    onChange={e => updateRef(r._id, 'prixVente', e.target.value)}
                   />
                   <button
                     onClick={() => removeRef(r._id)}
@@ -340,14 +349,14 @@ export function ProductsPage() {
 
   const handleSave = async (f: FormState) => {
     if (formModal.product) {
-      // Edit: preserve existing ref ids and stocks where possible
       const existingRefs = formModal.product.refs
       const updatedRefs: RefStock[] = f.refs.map(r => {
+        const pv = parseFloat(r.prixVente) || 0
         const existing = existingRefs.find(er => er.id === r._id)
         if (existing) {
-          return { ...existing, name: r.name.trim() }
+          return { ...existing, name: r.name.trim(), prixVente: pv }
         }
-        return { id: r._id, name: r.name.trim(), stock: 0, initial: 0, added: 0, sorti: 0, amount: 0, prixVente: 0 }
+        return { id: r._id, name: r.name.trim(), stock: 0, initial: 0, added: 0, sorti: 0, amount: 0, prixVente: pv }
       })
       await updateProduct({
         ...formModal.product,
@@ -358,7 +367,7 @@ export function ProductsPage() {
     } else {
       const newRefs: RefStock[] = f.refs.map(r => ({
         id: r._id, name: r.name.trim(),
-        stock: 0, initial: 0, added: 0, sorti: 0, amount: 0, prixVente: 0,
+        stock: 0, initial: 0, added: 0, sorti: 0, amount: 0, prixVente: parseFloat(r.prixVente) || 0,
       }))
       await addProduct({ name: f.name.trim(), category: f.category, refs: newRefs })
     }

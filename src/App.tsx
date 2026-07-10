@@ -12,8 +12,10 @@ import { ClientsPage }     from '@/pages/ClientsPage'
 import { SuppliersPage }   from '@/pages/SuppliersPage'
 import { CashPage }        from '@/pages/CashPage'
 import { ReportsPage }     from '@/pages/ReportsPage'
-// Routes accessible by cashiers
+import { ChinePage }       from '@/pages/ChinePage'
+// Routes by role
 const CASHIER_ROUTES = ['/pos', '/cash', '/stock']
+const CHINE_ROUTES   = ['/chine']
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore()
@@ -29,7 +31,20 @@ function RequireOwner({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-export { CASHIER_ROUTES }
+function RequireChine({ children }: { children: React.ReactNode }) {
+  const { appUser, loading } = useAuthStore()
+  if (loading) return null
+  if (appUser?.role !== 'owner' && appUser?.role !== 'chine') return <Navigate to="/pos" replace />
+  return <>{children}</>
+}
+
+function DefaultRedirect() {
+  const { appUser } = useAuthStore()
+  if (appUser?.role === 'chine') return <Navigate to="/chine" replace />
+  return <Navigate to="/pos" replace />
+}
+
+export { CASHIER_ROUTES, CHINE_ROUTES }
 
 export default function App() {
   useEffect(() => {
@@ -49,12 +64,14 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/pos" replace />} />
+          <Route index element={<DefaultRedirect />} />
           {/* Owner-only pages */}
           <Route path="dashboard"   element={<RequireOwner><DashboardPage /></RequireOwner>} />
           <Route path="clients"     element={<RequireOwner><ClientsPage /></RequireOwner>} />
           <Route path="suppliers"   element={<RequireOwner><SuppliersPage /></RequireOwner>} />
           <Route path="reports"     element={<RequireOwner><ReportsPage /></RequireOwner>} />
+          {/* Owner + Chine pages */}
+          <Route path="chine"       element={<RequireChine><ChinePage /></RequireChine>} />
           {/* Shared pages */}
           <Route path="pos"         element={<POSPage />} />
           <Route path="stock"       element={<StockPage />} />

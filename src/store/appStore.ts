@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import {
   collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
-  getDocs, onSnapshot, serverTimestamp, query, orderBy, writeBatch, where,
+  getDocs, onSnapshot, serverTimestamp, query, orderBy, writeBatch, where, runTransaction,
 } from 'firebase/firestore'
 import { db } from '@/firebase/config'
 
@@ -554,8 +554,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const _d = new Date()
     const yymmdd = _d.getFullYear().toString().slice(2) + String(_d.getMonth()+1).padStart(2,'0') + String(_d.getDate()).padStart(2,'0')
     const todayPrefix = `F-${yymmdd}-`
-    const allTx = [...get().ventesComptoir, ...get().clients.flatMap(c => c.transactions)]
-    const seq = allTx.filter(t => t.id.startsWith(todayPrefix)).length + 1
+    const counterRef = doc(db, COL.settings, `counter-${yymmdd}`)
+    let seq = 1
+    await runTransaction(db, async (t) => {
+      const snap = await t.get(counterRef)
+      seq = snap.exists() ? (snap.data().seq as number) + 1 : 1
+      t.set(counterRef, { seq })
+    })
     const txId = `${todayPrefix}${seq}`
     const total = lines.reduce((s, l) => s + l.total, 0)
     const paid  = payModes.filter(m => m.mode !== 'Crédit').reduce((s, m) => s + m.amount, 0)

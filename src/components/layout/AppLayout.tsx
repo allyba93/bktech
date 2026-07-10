@@ -1,12 +1,12 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutGrid, ShoppingCart, Package, Users, Truck,
-  DollarSign, BarChart2, LogOut, Moon, Sun, Menu, X, ClipboardCheck,
+  DollarSign, BarChart2, LogOut, Moon, Sun, Menu, X, ClipboardCheck, Ship,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '@/store/authStore'
 import { getInitials } from '@/lib/utils'
-import { CASHIER_ROUTES } from '@/App'
+import { CASHIER_ROUTES, CHINE_ROUTES } from '@/App'
 
 const NAV_ALL = [
   { to: '/dashboard',   label: 'Tableau de bord', icon: LayoutGrid,   section: 'Principal' },
@@ -16,6 +16,7 @@ const NAV_ALL = [
   { to: '/suppliers',   label: 'Fournisseurs',    icon: Truck,        section: null },
   { to: '/cash',        label: 'Caisse',          icon: DollarSign,   section: null },
   { to: '/reports',     label: 'Rapports',        icon: BarChart2,    section: 'Rapport' },
+  { to: '/chine',       label: 'Chine',           icon: Ship,         section: null },
 ]
 
 export function AppLayout() {
@@ -41,10 +42,12 @@ export function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  const isOwner = appUser?.role === 'owner'
-  const NAV = isOwner
+  const role = appUser?.role
+  const NAV = role === 'owner'
     ? NAV_ALL
-    : NAV_ALL.filter(n => CASHIER_ROUTES.includes(n.to))
+    : role === 'chine'
+      ? NAV_ALL.filter(n => CHINE_ROUTES.includes(n.to))
+      : NAV_ALL.filter(n => CASHIER_ROUTES.includes(n.to))
 
   // Close menu/panel on navigation
   useEffect(() => { setMenuOpen(false); setUserPanelOpen(false) }, [location.pathname])
@@ -114,7 +117,7 @@ export function AppLayout() {
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-[12px] font-semibold text-[#0f2460] truncate">{appUser?.name}</div>
-            <div className="text-[11px] text-[#1a5fa8]/60">{appUser?.role === 'owner' ? 'Propriétaire' : 'Caissier'}</div>
+            <div className="text-[11px] text-[#1a5fa8]/60">{appUser?.role === 'owner' ? 'Propriétaire' : appUser?.role === 'chine' ? 'Chine' : 'Caissier'}</div>
           </div>
           <div className="w-[22px] h-[22px] rounded-md bg-white border border-[rgba(26,95,168,0.15)] flex items-center justify-center flex-shrink-0">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 2L8.5 6H1.5L5 2Z" fill="#1a5fa8" opacity="0.6"/></svg>
@@ -158,7 +161,7 @@ export function AppLayout() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-bold text-[#0f2460] truncate">{appUser?.name}</div>
-                <div className="text-[11px] text-[#1a5fa8]/60 mt-0.5">{appUser?.role === 'owner' ? 'Propriétaire' : 'Caissier'}</div>
+                <div className="text-[11px] text-[#1a5fa8]/60 mt-0.5">{appUser?.role === 'owner' ? 'Propriétaire' : appUser?.role === 'chine' ? 'Chine' : 'Caissier'}</div>
                 {appUser?.email && <div className="text-[11px] text-[#1a5fa8]/45 truncate">{appUser.email}</div>}
               </div>
             </div>
@@ -192,7 +195,7 @@ export function AppLayout() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-[17px] font-bold text-[#0f2460] truncate">{appUser?.name}</div>
-                  <div className="text-[13px] text-[#1a5fa8]/70 mt-0.5">{appUser?.role === 'owner' ? 'Propriétaire' : 'Caissier'}</div>
+                  <div className="text-[13px] text-[#1a5fa8]/70 mt-0.5">{appUser?.role === 'owner' ? 'Propriétaire' : appUser?.role === 'chine' ? 'Chine' : 'Caissier'}</div>
                   {appUser?.email && <div className="text-[12px] text-[#1a5fa8]/50 mt-0.5 truncate">{appUser.email}</div>}
                 </div>
               </div>
@@ -265,7 +268,7 @@ export function AppLayout() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-semibold text-[#0f2460] truncate">{appUser?.name}</div>
-                <div className="text-[11px] text-[#1a5fa8]/60">{appUser?.role === 'owner' ? 'Propriétaire' : 'Caissier'}</div>
+                <div className="text-[11px] text-[#1a5fa8]/60">{appUser?.role === 'owner' ? 'Propriétaire' : appUser?.role === 'chine' ? 'Chine' : 'Caissier'}</div>
               </div>
               <button onClick={toggleTheme}
                 className="w-9 h-9 rounded-xl bg-[rgba(26,95,168,0.08)] border border-[rgba(26,95,168,0.15)] flex items-center justify-center cursor-pointer">

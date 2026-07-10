@@ -1,5 +1,5 @@
 // ── USERS ──────────────────────────────────────────────
-export type UserRole = 'owner' | 'cashier'
+export type UserRole = 'owner' | 'cashier' | 'chine'
 
 export interface AppUser {
   uid: string
@@ -17,6 +17,7 @@ export interface ProductRef {
   name: string
   stock: number
   prixVente?: number
+  prixAchat?: number
 }
 
 export interface Product {
@@ -207,6 +208,54 @@ export interface CartLine {
   adjPrice: number | null
   qty: number
   stock: number
+  prixAchat?: number
+}
+
+// ── CHINA ORDERS ───────────────────────────────────────
+export type ChinaOrderStatus =
+  | 'attente_client'   // waiting for client deposit
+  | 'commande'         // order placed in China, advance paid
+  | 'production'       // goods being produced
+  | 'expedition'       // goods shipped
+  | 'recu'             // goods received in Mauritania
+  | 'livre'            // delivered to client, settled
+
+export type ChinaShipping = 'fret' | 'bateau'
+
+export interface ChinaPayment {
+  id: string
+  date: string
+  amount: number       // toujours en MRU
+  amountRmb?: number   // montant original en RMB (paiements fournisseur)
+  exchangeRate?: number // taux utilisé : 1 RMB = ? MRU
+  mode: string
+  note?: string
+  proofUrl?: string    // URL photo preuve de paiement client
+}
+
+export interface ChinaOrder {
+  id: string
+  clientName: string
+  clientPhone?: string
+  description: string
+  orderDate: string
+  // Client side (MRU)
+  clientTotalAmount: number
+  clientPayments: ChinaPayment[]
+  // Supplier side
+  supplierTotalAmountRmb: number   // montant en RMB ¥
+  supplierTotalAmount: number      // équivalent MRU = RMB × taux
+  exchangeRate: number             // taux de référence : 1 RMB = ? MRU
+  supplierPayments: ChinaPayment[]
+  // Shipping
+  shippingMethod?: ChinaShipping
+  shippingCost: number
+  shippingDate?: string
+  // Status
+  status: ChinaOrderStatus
+  notes?: string
+  createdAt: string
+  updatedAt: string
 }
 
 // ── FIRESTORE COLLECTION PATHS ─────────────────────────
@@ -219,4 +268,5 @@ export const COLLECTIONS = {
   cashMovements:  'cashMovements',
   dayClosings:    'dayClosings',
   stockMovements: 'stockMovements',
+  chinaOrders:    'chinaOrders',
 } as const

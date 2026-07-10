@@ -124,6 +124,7 @@ function OEModal({ product, category, cartLines, isOwner, onClose, onConfirm }: 
         refId: r.id, refName: r.name,
         unitPrice: price, adjPrice: null,
         qty, stock: r.stock,
+        prixAchat: r.prixAchat ?? 0,
       })
     })
     if (!lines.length) {
@@ -683,6 +684,16 @@ export function POSPage() {
       if (payType === 'partiel' && total - totalPaid > 0) {
         payModes.push({ mode: 'Crédit', amount: total - totalPaid })
       }
+    }
+    const belowCost = lines.find(l => {
+      const sellPrice = l.adjPrice ?? l.unitPrice
+      return (l.prixAchat ?? 0) > 0 && sellPrice < (l.prixAchat ?? 0)
+    })
+    if (belowCost) {
+      const sellPrice = belowCost.adjPrice ?? belowCost.unitPrice
+      alert(`Prix de vente (${sellPrice.toLocaleString('fr-FR')} MRU) inférieur au prix d'achat (${(belowCost.prixAchat ?? 0).toLocaleString('fr-FR')} MRU) pour "${belowCost.refName}". Vente impossible.`)
+      setConfirming(false)
+      return
     }
     const txLines = lines.map(l => ({
       desc: l.refName,

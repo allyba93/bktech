@@ -41,7 +41,7 @@ function useResizable(initial: number, min: number, max: number) {
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type MvtType = 'vente' | 'credit' | 'client' | 'fourn' | 'depense' | 'entree' | 'ouverture' | 'cloture'
+type MvtType = 'vente' | 'credit' | 'client' | 'fourn' | 'depense' | 'investissement' | 'entree' | 'ouverture' | 'cloture' | 'benefice'
 type MvtDir  = 'entree' | 'sortie'
 type PayMode = { mode: string; amount: number }
 
@@ -57,8 +57,8 @@ interface Mouvement {
   modes: PayMode[]
 }
 
-type FilterMvt  = 'all' | 'entree' | 'sortie' | 'vente' | 'credit' | 'client' | 'fourn' | 'depense' | 'paid' | 'non_sorti'
-type FilterPeriod = 'today' | 'week' | 'month' | 'custom'
+type FilterMvt  = 'all' | 'entree' | 'sortie' | 'vente' | 'credit' | 'client' | 'fourn' | 'depense' | 'investissement' | 'benefice' | 'paid' | 'non_sorti'
+type FilterPeriod = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CHANNELS = [
@@ -70,6 +70,7 @@ const CHANNELS = [
 ] as const
 
 const DEP_CATS  = ['Loyer','Salaires','Électricité / Eau','Transport','Fournitures','Réparations','Paiement fournisseur','Autre']
+const INV_CATS  = ['Achat bagages']
 const ENT_CATS  = ['Dépôt client','Apport de fonds','Remboursement','Correction','Autre']
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -88,17 +89,19 @@ const chanInfo = (name: string) => CHANNELS.find(c => c.name === name) ?? (EXTRA
 
 // ─── Type icon ────────────────────────────────────────────────────────────────
 function TypeIcon({ type, dir }: { type: MvtType; dir: MvtDir }) {
-  const bg    = type==='ouverture'?'#e8f0fb':type==='cloture'?'#f0efe9':type==='credit'?'#f0e8ff':dir==='entree'?'#e8f5ee':'#fdecea'
-  const color = type==='ouverture'?'#1a5fa8':type==='cloture'?'#6b6a66':type==='credit'?'#7c3aed':dir==='entree'?'#1a7a4a':'#c0392b'
+  const bg    = type==='ouverture'?'#e8f0fb':type==='cloture'?'#f0efe9':type==='credit'?'#f0e8ff':type==='investissement'?'#fdf3dc':type==='benefice'?(dir==='entree'?'#e8f5ee':'#fdecea'):dir==='entree'?'#e8f5ee':'#fdecea'
+  const color = type==='ouverture'?'#1a5fa8':type==='cloture'?'#6b6a66':type==='credit'?'#7c3aed':type==='investissement'?'#996600':type==='benefice'?(dir==='entree'?'#1a7a4a':'#c0392b'):dir==='entree'?'#1a7a4a':'#c0392b'
   const paths: Record<MvtType, React.ReactNode> = {
-    vente:    <><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></>,
-    credit:   <><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></>,
-    client:   <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></>,
-    fourn:    <><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/></>,
-    depense:  <><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
-    entree:   <><polyline points="17,11 21,7 17,3"/><line x1="21" y1="7" x2="9" y2="7"/><path d="M3 21v-4a4 4 0 0 1 4-4h14"/></>,
-    ouverture:<><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></>,
-    cloture:  <><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></>,
+    vente:          <><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></>,
+    credit:         <><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></>,
+    client:         <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></>,
+    fourn:          <><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/></>,
+    depense:        <><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
+    investissement: <><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></>,
+    benefice:       <><polyline points="22,7 13,16 9,12 2,19"/><polyline points="15,7 22,7 22,14"/></>,
+    entree:         <><polyline points="17,11 21,7 17,3"/><line x1="21" y1="7" x2="9" y2="7"/><path d="M3 21v-4a4 4 0 0 1 4-4h14"/></>,
+    ouverture:      <><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></>,
+    cloture:        <><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></>,
   }
   return (
     <div className="flex h-[34px] w-[34px] flex-shrink-0 items-center justify-center rounded-[9px]" style={{ background: bg }}>
@@ -186,6 +189,63 @@ function DepenseModal({ onClose, onSave }: { onClose: () => void; onSave: (m: Om
             onSave({ date:todayStr(), time:nowTimeStr(), type:'depense', dir:'sortie', desc:desc||cat, cat, montant:amt, modes:[{mode,amount:amt}] })
             onClose()
           }} className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#c0392b] px-4 py-2 text-[13px] font-medium text-white cursor-pointer">
+            <Check size={13}/> Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Investissement modal ─────────────────────────────────────────────────────
+function InvestissementModal({ onClose, onSave }: { onClose: () => void; onSave: (m: Omit<Mouvement,'id'>) => void }) {
+  const [montant, setMontant] = useState('')
+  const [cat,     setCat]     = useState(INV_CATS[0])
+  const [desc,    setDesc]    = useState('')
+  const [mode,    setMode]    = useState('Cash')
+  const inCls = 'rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-2 text-[13px] outline-none focus:border-[#1a1a18] focus:bg-white'
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/45" onClick={onClose}>
+      <div className="flex flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-black/[0.08] bg-white w-full sm:w-[460px]" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
+          <div>
+            <h2 className="text-[15px] font-medium">Enregistrer un investissement</h2>
+            <p className="mt-0.5 text-[11px] text-[#996600]">Classé comme investissement, pas dépense</p>
+          </div>
+          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg border-none bg-[#f0efe9] cursor-pointer"><X size={13} className="text-[#6b6a66]"/></button>
+        </div>
+        <div className="flex flex-col gap-3.5 p-5">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[12px] font-medium text-[#6b6a66]">Montant (MRU)</label>
+              <MoneyInput value={montant} onChange={setMontant} placeholder="0" className={inCls + ' font-mono'}/>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[12px] font-medium text-[#6b6a66]">Catégorie</label>
+              <select value={cat} onChange={e => setCat(e.target.value)} className={inCls}>
+                {INV_CATS.map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] font-medium text-[#6b6a66]">Description</label>
+            <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="ex: achat 50 valises" className={inCls}/>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] font-medium text-[#6b6a66]">Mode de paiement</label>
+            <select value={mode} onChange={e => setMode(e.target.value)} className={inCls}>
+              {CHANNELS.map(c => <option key={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-black/[0.08] px-5 py-3">
+          <button onClick={onClose} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-4 py-2 text-[13px] font-medium cursor-pointer">Annuler</button>
+          <button onClick={() => {
+            const amt = parseFloat(montant)
+            if (!amt || amt <= 0) { alert('Montant invalide'); return }
+            onSave({ date:todayStr(), time:nowTimeStr(), type:'investissement', dir:'sortie', desc:desc||cat, cat, montant:amt, modes:[{mode,amount:amt}] })
+            onClose()
+          }} className="flex items-center gap-1.5 rounded-[9px] border border-[#996600]/40 bg-[#fdf3dc] px-4 py-2 text-[13px] font-medium text-[#996600] cursor-pointer">
             <Check size={13}/> Enregistrer
           </button>
         </div>
@@ -305,14 +365,15 @@ function EntreeModal({ onClose, onSave }: { onClose: () => void; onSave: (m: Omi
 }
 
 // ─── Ouverture modal ──────────────────────────────────────────────────────────
-function OuvertureModal({ onClose, onSave }: { onClose: () => void; onSave: (amt: number, note: string) => void }) {
-  const [montant, setMontant] = useState('')
+function OuvertureModal({ onClose, onSave, initialMontant }: { onClose: () => void; onSave: (amt: number, note: string) => void; initialMontant?: number }) {
+  const [montant, setMontant] = useState(initialMontant != null ? String(initialMontant) : '')
   const [note,    setNote]    = useState('')
+  const isEdit = initialMontant != null
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/45" onClick={onClose}>
       <div className="flex flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-black/[0.08] bg-white w-full sm:w-[400px]" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
-          <h2 className="text-[15px] font-medium">Ouvrir la caisse</h2>
+          <h2 className="text-[15px] font-medium">{isEdit ? 'Modifier le solde d\'ouverture' : 'Ouvrir la caisse'}</h2>
           <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg border-none bg-[#f0efe9] cursor-pointer"><X size={13} className="text-[#6b6a66]"/></button>
         </div>
         <div className="flex flex-col gap-3.5 p-5">
@@ -343,8 +404,8 @@ function OuvertureModal({ onClose, onSave }: { onClose: () => void; onSave: (amt
 }
 
 // ─── Clôture modal ────────────────────────────────────────────────────────────
-function ClotureModal({ solde, mouvements, ouverture, soldeEpargne, onClose, onSave }: {
-  solde: number; mouvements: Mouvement[]; ouverture: number; soldeEpargne: number; onClose: () => void
+function ClotureModal({ solde, mouvements, ouverture, soldeEpargne, beneficeNet, onClose, onSave }: {
+  solde: number; mouvements: Mouvement[]; ouverture: number; soldeEpargne: number; beneficeNet: number; onClose: () => void
   onSave: (newOuv: number, notes: string, virementFond: number) => void
 }) {
   const [newOuv,   setNewOuv]   = useState('')
@@ -353,8 +414,8 @@ function ClotureModal({ solde, mouvements, ouverture, soldeEpargne, onClose, onS
 
   const td = todayStr()
   const todayMvts = mouvements.filter(m => m.date === td)
-  const entrees  = todayMvts.filter(m => m.dir==='entree' && m.type!=='ouverture' && m.type!=='credit').reduce((s,m)=>s+m.montant,0)
-  const sorties  = todayMvts.filter(m => m.dir==='sortie' && m.type!=='cloture').reduce((s,m)=>s+m.montant,0)
+  const entrees  = todayMvts.filter(m => m.dir==='entree' && m.type!=='ouverture' && m.type!=='credit' && m.type!=='benefice').reduce((s,m)=>s+m.montant,0)
+  const sorties  = todayMvts.filter(m => m.dir==='sortie' && m.type!=='cloture' && m.type!=='benefice').reduce((s,m)=>s+m.montant,0)
   const ventes   = todayMvts.filter(m => m.type==='vente')
   const ventesTotal = ventes.reduce((s,m)=>s+m.montant,0)
   // Effective opening balance = running total minus today's flows
@@ -398,6 +459,10 @@ function ClotureModal({ solde, mouvements, ouverture, soldeEpargne, onClose, onS
             <div className="flex justify-between border-t border-black/[0.1] pt-2 text-[14px] font-semibold">
               <span>Solde de clôture</span>
               <span className="font-mono text-[#1a7a4a]">{fmt(solde)} MRU</span>
+            </div>
+            <div className="flex justify-between border-t border-black/[0.1] pt-2 text-[13px] font-semibold" style={{ color: beneficeNet >= 0 ? '#1a7a4a' : '#c0392b' }}>
+              <span>Bénéfice net journée</span>
+              <span className="font-mono">{beneficeNet >= 0 ? '+' : ''}{fmt(Math.round(beneficeNet))} MRU</span>
             </div>
             {/* Ventes breakdown */}
             <div className="mt-1 border-t border-black/[0.08] pt-3">
@@ -1027,8 +1092,9 @@ function EditMvtModal({ mvt, onClose, onSave, onDelete }: {
   onDelete: () => void
 }) {
   const isDepense = mvt.type === 'depense'
+  const isInv     = mvt.type === 'investissement'
   const isClient  = mvt.type === 'client'
-  const cats = isDepense ? DEP_CATS : ENT_CATS
+  const cats = isDepense ? DEP_CATS : isInv ? INV_CATS : ENT_CATS
   const [montant, setMontant] = useState(String(mvt.montant))
   const [cat,     setCat]     = useState(mvt.cat)
   const [desc,    setDesc]    = useState(mvt.desc)
@@ -1037,7 +1103,7 @@ function EditMvtModal({ mvt, onClose, onSave, onDelete }: {
 
   const inCls = "rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-2 text-[13px] outline-none focus:border-[#1a1a18] focus:bg-white w-full"
 
-  const title = isClient ? 'Modifier le paiement client' : isDepense ? 'Modifier la dépense' : "Modifier l'entrée"
+  const title = isClient ? 'Modifier le paiement client' : isInv ? "Modifier l'investissement" : isDepense ? 'Modifier la dépense' : "Modifier l'entrée"
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/45" onClick={onClose}>
@@ -1294,7 +1360,7 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
       if (existing >= 0) {
         return ls.map((l, i) => i === existing ? { ...l, qty: l.qty + 1, total: (l.qty + 1) * l.pu } : l)
       }
-      const pu = ref.prixVente || 0
+      const pu = ref.prixVente && ref.prixVente > 0 ? ref.prixVente : 0
       return [...ls, { desc: ref.name, productName: product.name, qty: 1, pu, total: pu, productId: product.id, refId: ref.id }]
     })
     setSearch('')
@@ -1308,7 +1374,28 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
     ).slice(0, 6)
   }, [products, search])
 
+  const refCostMap = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of products) for (const r of p.refs) m.set(r.id, r.prixAchat ?? 0)
+    return m
+  }, [products])
+
   const handleSave = async () => {
+    const zeroPrice = editLines.find(l => !l.pu || l.pu <= 0)
+    if (zeroPrice) {
+      alert(`"${zeroPrice.desc}" a un prix de vente à 0. Veuillez saisir un prix valide.`)
+      return
+    }
+    const belowCost = editLines.find(l => {
+      if (!l.refId) return false
+      const cost = refCostMap.get(l.refId) ?? 0
+      return cost > 0 && l.pu < cost
+    })
+    if (belowCost) {
+      const cost = refCostMap.get(belowCost.refId!) ?? 0
+      alert(`Prix de vente (${belowCost.pu.toLocaleString('fr-FR')} MRU) inférieur au prix d'achat (${cost.toLocaleString('fr-FR')} MRU) pour "${belowCost.desc}". Vente impossible.`)
+      return
+    }
     const finalLines = editLines.map(l => ({ ...l, total: l.qty * l.pu }))
     setSaving(true)
     try { await onSave(finalLines, total) }
@@ -1452,7 +1539,7 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
-type Modal = 'depense' | 'entree' | 'ouverture' | 'cloture' | 'alimenter' | 'retirer' | 'addDette' | null
+type Modal = 'depense' | 'investissement' | 'entree' | 'ouverture' | 'cloture' | 'alimenter' | 'retirer' | 'addDette' | null
 // ─── Sortie Modal ─────────────────────────────────────────────────────────────
 function SortieModal({ tx, mvt, boutiqueFermee, onClose, onViewPdf, onToggleLine, onValidate, onEncaisser }: {
   tx: Tx
@@ -1673,16 +1760,16 @@ export function CashPage() {
 
   const derivedCreditMvts = useMemo((): Mouvement[] => {
     const result: Mouvement[] = []
-    const add = (tx: { id: string; date: string; time?: string; total: number; payModes: { mode: string; amount: number }[] }, clientPrenom: string) => {
+    const add = (tx: { id: string; date: string; time?: string; total: number; payModes: { mode: string; amount: number }[] }, clientFullName: string, clientId: string) => {
       // Include tx if it ever had Crédit/Avance (even fully paid — amount may be 0)
       // so the row stays visible in CashPage until sortie is validated
       const nonCash = tx.payModes.filter(m => m.mode === 'Crédit' || m.mode === 'Avance')
       if (nonCash.length === 0) return
-      const label = clientPrenom ? ` — ${clientPrenom}` : ''
+      const label = clientFullName ? ` — ${clientFullName}` : ''
       const time = txTimeMap[tx.id] ?? tx.time ?? '--:--'
       for (const pm of nonCash) {
         result.push({
-          id: `inv_${tx.id}_${pm.mode}`,
+          id: `inv_${tx.id}_${pm.mode}_${clientId}`,
           date: tx.date,
           time,
           type: 'credit' as MvtType,
@@ -1696,16 +1783,35 @@ export function CashPage() {
       }
     }
     for (const client of clients) {
-      for (const tx of client.transactions) add(tx, client.prenom)
+      const fullName = `${client.prenom} ${client.nom}`.trim()
+      for (const tx of client.transactions) add(tx, fullName, client.id)
     }
-    for (const tx of ventesComptoir) add(tx, '')
+    for (const tx of ventesComptoir) add(tx, '', '')
     return result
   }, [clients, ventesComptoir, txTimeMap])
 
   // Base cashMvts (filter out any legacy type:'credit' entries) merged with derived invoice entries
   const mouvements = useMemo((): Mouvement[] => {
     const base = (rawMvts as unknown as Mouvement[]).filter(m => m.type !== 'credit')
-    return [...base, ...derivedCreditMvts]
+    // Deduplicate consecutive ouvertures (same session, no cloture in between).
+    // Ouvertures after a cloture are a new session and must be kept.
+    const sorted = [...base].sort((a, b) => {
+      const dc = a.date.localeCompare(b.date)
+      return dc !== 0 ? dc : a.time.localeCompare(b.time)
+    })
+    const keepIds = new Set<string>(sorted.map(m => m.id))
+    const lastOuvPerDay = new Map<string, string>() // date → id of last consecutive ouverture
+    for (const m of sorted) {
+      if (m.type === 'ouverture') {
+        const prev = lastOuvPerDay.get(m.date)
+        if (prev) keepIds.delete(prev) // drop earlier consecutive duplicate
+        lastOuvPerDay.set(m.date, m.id)
+      } else if (m.type === 'cloture') {
+        lastOuvPerDay.delete(m.date) // next ouverture starts a new session
+      }
+    }
+    const deduped = base.filter(m => keepIds.has(m.id))
+    return [...deduped, ...derivedCreditMvts]
   }, [rawMvts, derivedCreditMvts])
 
   function buildInvoice(mvt: Mouvement): InvoiceData | null {
@@ -1713,12 +1819,19 @@ export function CashPage() {
     const match = mvt.desc.match(/Vente\s+(F-\S+)/)
     if (!match) return null
     const txId = match[1]
-    // Find transaction in all clients
+    // Full client name in desc: "Vente F-xxx — Prenom Nom" (authoritative since we now store full name)
+    const descClientName = mvt.desc.match(/—\s+(.+)$/)?.[1]?.trim().toLowerCase()
+    // Find transaction — exact full-name match takes priority
     let foundClient: typeof clients[number] | null = null
     let foundTx: typeof clients[number]['transactions'][number] | null = null
     for (const c of clients) {
       const tx = c.transactions.find(t => t.id === txId)
-      if (tx) { foundClient = c; foundTx = tx; break }
+      if (!tx) continue
+      if (!foundClient) { foundClient = c; foundTx = tx }
+      if (descClientName) {
+        const cName = `${c.prenom} ${c.nom}`.trim().toLowerCase()
+        if (cName === descClientName) { foundClient = c; foundTx = tx; break }
+      }
     }
     // Try anonymous (comptoir) transactions
     if (!foundTx) {
@@ -1776,38 +1889,104 @@ export function CashPage() {
   // Solde du jour
   const td = todayStr()
   const todayMvts  = useMemo(() => mouvements.filter(m => m.date === td), [mouvements, td])
-  const entreesDay = useMemo(() => todayMvts.filter(m => m.dir==='entree' && m.type!=='ouverture' && m.type!=='credit').reduce((s,m)=>s+m.montant,0), [todayMvts])
-  const sortiesDay = useMemo(() => todayMvts.filter(m => m.dir==='sortie' && m.type!=='cloture').reduce((s,m)=>s+m.montant,0), [todayMvts])
+  const entreesDay = useMemo(() => todayMvts.filter(m => m.dir==='entree' && m.type!=='ouverture' && m.type!=='credit' && m.type!=='benefice').reduce((s,m)=>s+m.montant,0), [todayMvts])
+  const sortiesDay = useMemo(() => todayMvts.filter(m => m.dir==='sortie' && m.type!=='cloture' && m.type!=='benefice').reduce((s,m)=>s+m.montant,0), [todayMvts])
   const ventesDay  = useMemo(() => todayMvts.filter(m => m.type==='vente'), [todayMvts])
   const ventesTotal= useMemo(() => ventesDay.reduce((s,m)=>s+m.montant,0), [ventesDay])
   const encaissDay = useMemo(() => todayMvts.filter(m => m.type==='client' && m.dir==='entree'), [todayMvts])
   const encaissTotal = useMemo(() => encaissDay.reduce((s,m)=>s+m.montant,0), [encaissDay])
-  const clotureDuJour = useMemo(() => todayMvts.find(m => m.type === 'cloture'), [todayMvts])
+  const clotureDuJour   = useMemo(() => todayMvts.find(m => m.type === 'cloture'),   [todayMvts])
+  const ouvertureDuJour = useMemo(() => todayMvts.find(m => m.type === 'ouverture'), [todayMvts])
+  // Caisse is open if the most recent ouverture/cloture movement today is an ouverture
+  const caisseOuverte = useMemo(() => {
+    const relevant = todayMvts
+      .filter(m => m.type === 'ouverture' || m.type === 'cloture')
+      .sort((a, b) => a.time.localeCompare(b.time))
+    return relevant.length > 0 && relevant[relevant.length - 1].type === 'ouverture'
+  }, [todayMvts])
+
+  // Current session boundaries (last ouverture → first cloture after it, or open-ended)
+  const sessionBounds = useMemo(() => {
+    const relevant = todayMvts
+      .filter(m => m.type === 'ouverture' || m.type === 'cloture')
+      .sort((a, b) => a.time.localeCompare(b.time))
+    // Find the last ouverture
+    let lastOuvIdx = -1
+    for (let i = relevant.length - 1; i >= 0; i--) {
+      if (relevant[i].type === 'ouverture') { lastOuvIdx = i; break }
+    }
+    if (lastOuvIdx === -1) return null
+    const start = relevant[lastOuvIdx].time
+    // First cloture after the last ouverture
+    const endMvt = relevant.slice(lastOuvIdx + 1).find(m => m.type === 'cloture')
+    return { start, end: endMvt?.time ?? null }
+  }, [todayMvts])
+
+  // IDs of vente cashMvts within the current session window
+  const sessionVenteMvtIds = useMemo(() => {
+    if (!sessionBounds) return new Set<string>()
+    const { start, end } = sessionBounds
+    return new Set(
+      todayMvts
+        .filter(m => m.type === 'vente' && m.time >= start && (end === null || m.time <= end))
+        .map(m => {
+          const match = m.desc.match(/Vente\s+(F-\S+)/)
+          return match ? match[1] : null
+        })
+        .filter(Boolean) as string[]
+    )
+  }, [todayMvts, sessionBounds])
+
+  const beneficeSession = useMemo(() => {
+    const refCostMap = new Map<string, number>()
+    for (const p of products) for (const r of p.refs) refCostMap.set(r.id, r.prixAchat ?? 0)
+    const allTxs = [...ventesComptoir, ...clients.flatMap(c => c.transactions)]
+    // Only count txs whose vente cashMvt falls within the current session
+    const sessionTxs = allTxs.filter(tx => tx.date === td && sessionVenteMvtIds.has(tx.id))
+    return sessionTxs.reduce((total, tx) =>
+      total + tx.lines.reduce((s, l) => {
+        const cost = l.refId ? (refCostMap.get(l.refId) ?? 0) : 0
+        return s + (l.pu - cost) * l.qty
+      }, 0)
+    , 0)
+  }, [ventesComptoir, clients, products, td, sessionVenteMvtIds])
+
+  // Depenses within session window
+  const depensesJour = useMemo(() => {
+    if (!sessionBounds) return 0
+    const { start, end } = sessionBounds
+    return todayMvts
+      .filter(m => m.type === 'depense' && m.time >= start && (end === null || m.time <= end))
+      .reduce((s, m) => s + m.montant, 0)
+  }, [todayMvts, sessionBounds])
+
+  const beneficeNet = beneficeSession - depensesJour
+
   const solde = useMemo(() => {
-    const sorted = [...(rawMvts as unknown as Mouvement[])]
+    // Use deduped mouvements (excludes credit rows which are non-cash)
+    const sorted = mouvements
+      .filter(m => m.type !== 'credit')
       .sort((a, b) => {
         const dc = parseD(a.date).getTime() - parseD(b.date).getTime()
         return dc !== 0 ? dc : a.time.localeCompare(b.time)
       })
     if (sorted.length === 0) return ouverture
-    // Start from the configured opening amount so movements without an explicit
-    // ouverture cashMvt still have a correct baseline. Explicit ouverture/cloture
-    // cashMvts will override this with their stored montant.
     let balance = ouverture
     for (const m of sorted) {
-      // cloture and ouverture both act as hard resets (avoids double-counting)
       if (m.type === 'cloture' || m.type === 'ouverture') balance = m.montant
+      else if (m.type === 'benefice') continue
       else if (m.dir === 'entree') balance += m.montant
       else balance -= m.montant
     }
     return balance
-  }, [rawMvts, ouverture])
+  }, [mouvements, ouverture])
 
   // Filtered list
   const filteredMvts = useMemo(() => {
     let from: Date, to: Date
     const now = new Date()
     if (period === 'today') { from = parseD(td); to = parseD(td) }
+    else if (period === 'yesterday') { from = parseD(daysAgo(1)); to = parseD(daysAgo(1)) }
     else if (period === 'week') { from = parseD(daysAgo(6)); to = new Date() }
     else if (period === 'month') { from = new Date(now.getFullYear(), now.getMonth(), 1); to = now }
     else {
@@ -1820,10 +1999,18 @@ export function CashPage() {
       if (filterMvt==='entree')  return m.dir==='entree' && m.type!=='credit'
       if (filterMvt==='sortie')  return m.dir==='sortie'
       if (filterMvt==='vente')   return m.type==='vente' || m.type==='credit'
-      if (filterMvt==='credit')  return m.type==='credit'
+      if (filterMvt==='credit') {
+        if (m.type !== 'credit') return false
+        const tid = m.desc.match(/Vente\s+(F-\S+)/)?.[1]
+        if (!tid) return true
+        const tx = txMap.get(tid)
+        return tx ? tx.paid < tx.total : true
+      }
       if (filterMvt==='client')  return m.type==='client'
       if (filterMvt==='fourn')   return m.type==='fourn'
       if (filterMvt==='depense') return m.type==='depense'
+      if (filterMvt==='investissement') return m.type==='investissement'
+      if (filterMvt==='benefice') return m.type==='benefice'
       if (filterMvt==='paid') {
         if (m.type !== 'vente' && m.type !== 'credit') return false
         const tid = m.desc.match(/(?:Vente|Annulation|Encaissement)\s+(F-\S+)/)?.[1]
@@ -1878,7 +2065,9 @@ export function CashPage() {
     { key:'paid',      label:'Payées' },
     { key:'non_sorti', label:'Non sorties' },
     { key:'credit',    label:'Crédits' },
-    { key:'depense',   label:'Dépenses',     variant:'out' },
+    { key:'depense',        label:'Dépenses',       variant:'out' },
+    { key:'investissement', label:'Investissements', variant:'out' },
+    { key:'benefice',       label:'Bénéfices' },
   ]
 
   return (
@@ -1894,9 +2083,12 @@ export function CashPage() {
         {/* Desktop: full button row */}
         <div className="hidden sm:flex gap-2 px-4 md:px-6 pb-3">
           {cashTab === 'journaliere' ? <>
-            <button onClick={() => setModal('ouverture')}
-              className="flex items-center justify-center gap-1.5 rounded-[9px] border-none bg-[#1a1a18] px-3.5 py-2 text-[13px] font-medium text-white cursor-pointer hover:opacity-90">
-              <Plus size={13}/> Ouvrir caisse
+            <button onClick={() => setModal(caisseOuverte ? 'cloture' : 'ouverture')}
+              className={cn('flex items-center justify-center gap-1.5 rounded-[9px] border px-3.5 py-2 text-[13px] font-medium cursor-pointer hover:opacity-90',
+                caisseOuverte
+                  ? 'border-[#996600] bg-[#fdf3dc] text-[#996600]'
+                  : 'border-none bg-[#1a1a18] text-white')}>
+              {caisseOuverte ? <><Check size={13}/> Clôturer caisse</> : <><Plus size={13}/> Ouvrir caisse</>}
             </button>
             <button onClick={() => setModal('entree')}
               className="flex items-center justify-center gap-1.5 rounded-[9px] border-none bg-[#1a7a4a] px-3.5 py-2 text-[13px] font-medium text-white cursor-pointer hover:opacity-90">
@@ -1906,14 +2098,9 @@ export function CashPage() {
               className="flex items-center justify-center gap-1.5 rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3.5 py-2 text-[13px] font-medium cursor-pointer hover:opacity-85">
               <Plus size={13}/> Dépense
             </button>
-            <button onClick={() => !clotureDuJour && setModal('cloture')}
-              disabled={!!clotureDuJour}
-              title={clotureDuJour ? 'Caisse déjà clôturée — ouvrir d\'abord la caisse' : undefined}
-              className={cn('flex items-center justify-center gap-1.5 rounded-[9px] border px-3.5 py-2 text-[13px] font-medium',
-                clotureDuJour
-                  ? 'border-black/[0.06] bg-[#f0efe9] text-[#a8a7a2] cursor-not-allowed opacity-60'
-                  : 'border-[#996600] bg-[#fdf3dc] text-[#996600] cursor-pointer hover:opacity-85')}>
-              <Check size={13}/> Clôture
+            <button onClick={() => setModal('investissement')}
+              className="flex items-center justify-center gap-1.5 rounded-[9px] border border-[#996600]/40 bg-[#fdf3dc] px-3.5 py-2 text-[13px] font-medium text-[#996600] cursor-pointer hover:opacity-85">
+              <Plus size={13}/> Investissement
             </button>
           </> : <>
             <button onClick={() => setModal('retirer')}
@@ -1942,9 +2129,12 @@ export function CashPage() {
           {actionsOpen && (
             <div className="grid grid-cols-2 gap-2 px-4 pb-3">
               {cashTab === 'journaliere' ? <>
-                <button onClick={() => { setActionsOpen(false); setModal('ouverture') }}
-                  className="flex items-center justify-center gap-1.5 rounded-[9px] border-none bg-[#1a1a18] px-3.5 py-2.5 text-[13px] font-medium text-white cursor-pointer">
-                  <Plus size={13}/> Ouvrir caisse
+                <button onClick={() => { setActionsOpen(false); setModal(caisseOuverte ? 'cloture' : 'ouverture') }}
+                  className={cn('flex items-center justify-center gap-1.5 rounded-[9px] border px-3.5 py-2.5 text-[13px] font-medium cursor-pointer',
+                    caisseOuverte
+                      ? 'border-[#996600] bg-[#fdf3dc] text-[#996600]'
+                      : 'border-none bg-[#1a1a18] text-white')}>
+                  {caisseOuverte ? <><Check size={13}/> Clôturer caisse</> : <><Plus size={13}/> Ouvrir caisse</>}
                 </button>
                 <button onClick={() => { setActionsOpen(false); setModal('entree') }}
                   className="flex items-center justify-center gap-1.5 rounded-[9px] border-none bg-[#1a7a4a] px-3.5 py-2.5 text-[13px] font-medium text-white cursor-pointer">
@@ -1954,13 +2144,9 @@ export function CashPage() {
                   className="flex items-center justify-center gap-1.5 rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3.5 py-2.5 text-[13px] font-medium cursor-pointer">
                   <Plus size={13}/> Dépense
                 </button>
-                <button onClick={() => { if (clotureDuJour) return; setActionsOpen(false); setModal('cloture') }}
-                  disabled={!!clotureDuJour}
-                  className={cn('flex items-center justify-center gap-1.5 rounded-[9px] border px-3.5 py-2.5 text-[13px] font-medium',
-                    clotureDuJour
-                      ? 'border-black/[0.06] bg-[#f0efe9] text-[#a8a7a2] cursor-not-allowed opacity-60'
-                      : 'border-[#996600] bg-[#fdf3dc] text-[#996600] cursor-pointer')}>
-                  <Check size={13}/> Clôture
+                <button onClick={() => { setActionsOpen(false); setModal('investissement') }}
+                  className="flex items-center justify-center gap-1.5 rounded-[9px] border border-[#996600]/40 bg-[#fdf3dc] px-3.5 py-2.5 text-[13px] font-medium text-[#996600] cursor-pointer">
+                  <Plus size={13}/> Investissement
                 </button>
               </> : <>
                 <button onClick={() => { setActionsOpen(false); setModal('retirer') }}
@@ -2300,38 +2486,25 @@ export function CashPage() {
 
         {/* Expanded detail — hidden by default */}
         {kpiOpen && (
-          <div className="px-3 pb-3 pt-1 space-y-2" style={{ background: 'linear-gradient(135deg,#f0f4ff 0%,#e8f0fb 100%)' }}>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="kpi-blue px-3 py-3">
-                <div className="text-[9px] font-bold uppercase tracking-[.7px] text-[#1a5fa8]">Solde actuel</div>
-                <div className="font-mono text-[20px] font-bold leading-none text-[#0f2460] mt-1">{fmt(solde)}</div>
-                <div className="text-[9px] text-[#a8a7a2] mt-1">MRU en caisse</div>
+          <div className="px-3 pb-3 pt-1 flex flex-col gap-2" style={{ background: 'linear-gradient(135deg,#f0f4ff 0%,#e8f0fb 100%)' }}>
+            {[
+              { lbl:'Solde actuel',      val:fmt(solde),                                               sub:'MRU en caisse',  color:'#1a7a4a' },
+              { lbl:'Ouverture',         val:fmt(ouverture),                                           sub:'MRU initial',    color:'#1a5fa8' },
+              { lbl:'Entrées du jour',   val:'+'+fmt(entreesDay),                                      sub:'MRU encaissés',  color:'#1a7a4a' },
+              { lbl:'Sorties du jour',   val:'-'+fmt(sortiesDay),                                      sub:'MRU décaissés',  color:'#c0392b' },
+              { lbl:'Ventes du jour',    val:fmt(ventesTotal),                                         sub:ventesDay.length+' vente'+(ventesDay.length!==1?'s':''),  color:'#996600' },
+              { lbl:'Encaissé factures', val:fmt(encaissTotal),                                        sub:encaissDay.length+' encaissement'+(encaissDay.length!==1?'s':''), color:'#7c3aed' },
+              { lbl:'Marge brute',  val:fmt(Math.round(beneficeSession)),                             sub:'Prix vente − prix achat',                   color: beneficeSession >= 0 ? '#1a7a4a' : '#c0392b' },
+              { lbl:'Bénéfice net', val:(beneficeNet>=0?'+':'')+fmt(Math.round(beneficeNet)),         sub:`Marge − dépenses (${fmt(depensesJour)} MRU)`, color: beneficeNet     >= 0 ? '#1a7a4a' : '#c0392b' },
+            ].map(k => (
+              <div key={k.lbl} className="flex items-center justify-between rounded-[10px] bg-white/70 px-3 py-2.5" style={{ border:'1px solid rgba(200,175,100,0.18)' }}>
+                <div className="text-[12px] font-medium text-[#6b6a66]">{k.lbl}</div>
+                <div className="text-right">
+                  <div className="font-mono text-[14px] font-bold leading-none" style={{ color: k.color }}>{k.val}</div>
+                  <div className="text-[9px] text-[#a8a7a2] mt-0.5">{k.sub}</div>
+                </div>
               </div>
-              <div className="kpi-amber px-3 py-3">
-                <div className="text-[9px] font-bold uppercase tracking-[.7px] text-[#996600]">Ventes</div>
-                <div className="font-mono text-[20px] font-bold leading-none text-[#996600] mt-1">{fmt(ventesTotal)}</div>
-                <div className="text-[9px] text-[#a8a7a2] mt-1">{ventesDay.length} vente{ventesDay.length!==1?'s':''}</div>
-              </div>
-            </div>
-            <div className="rounded-[10px] px-3 py-2.5" style={{ background:'rgba(124,58,237,0.08)', border:'1px solid rgba(124,58,237,0.18)' }}>
-              <div className="text-[9px] font-bold uppercase tracking-[.7px] text-[#7c3aed]">Encaissé factures</div>
-              <div className="font-mono text-[18px] font-bold leading-none text-[#7c3aed] mt-1">{fmt(encaissTotal)} <span className="text-[10px] font-normal text-[#a8a7a2]">MRU</span></div>
-              <div className="text-[9px] text-[#a8a7a2] mt-1">{encaissDay.length} encaissement{encaissDay.length!==1?'s':''} du jour</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="kpi-green px-2 py-2.5 text-center">
-                <div className="text-[9px] font-bold uppercase tracking-[.5px] text-[#1a7a4a]">Entrées</div>
-                <div className="font-mono text-[12px] font-bold leading-none mt-1 text-[#1a7a4a]">+{fmt(entreesDay)}</div>
-              </div>
-              <div className="kpi-red px-2 py-2.5 text-center">
-                <div className="text-[9px] font-bold uppercase tracking-[.5px] text-[#c0392b]">Sorties</div>
-                <div className="font-mono text-[12px] font-bold leading-none mt-1 text-[#c0392b]">−{fmt(sortiesDay)}</div>
-              </div>
-              <div className="kpi-blue px-2 py-2.5 text-center">
-                <div className="text-[9px] font-bold uppercase tracking-[.5px] text-[#1a5fa8]">Ouvert.</div>
-                <div className="font-mono text-[12px] font-bold leading-none mt-1 text-[#1a5fa8]">{fmt(ouverture)}</div>
-              </div>
-            </div>
+            ))}
           </div>
         )}
       </div>
@@ -2341,11 +2514,11 @@ export function CashPage() {
         {/* Desktop: 2 groupes — Période | Type de mouvement */}
         <div className="hidden sm:flex items-center gap-1.5">
           <span className="text-[9px] font-bold uppercase tracking-[.7px] text-[#a8a7a2] select-none">Période</span>
-          {(['today','week','month','custom'] as FilterPeriod[]).map(p => (
+          {(['today','yesterday','week','month','custom'] as FilterPeriod[]).map(p => (
             <button key={p} onClick={() => setPeriod(p)}
               className={cn('rounded-full border px-3 py-1 text-[11px] font-medium cursor-pointer transition-all whitespace-nowrap',
                 period===p ? 'border-[#1a1a18] bg-[#1a1a18] text-[#f5f4f0]' : 'border-black/[0.08] bg-white text-[#6b6a66] hover:bg-[#f0efe9]')}>
-              {p==='today'?"Aujourd'hui":p==='week'?'7 jours':p==='month'?'Ce mois':'Période…'}
+              {p==='today'?"Aujourd'hui":p==='yesterday'?'Hier':p==='week'?'7 jours':p==='month'?'Ce mois':'Période…'}
             </button>
           ))}
           <div className="mx-1 h-4 w-px flex-shrink-0 bg-black/[0.12]"/>
@@ -2368,6 +2541,7 @@ export function CashPage() {
         <select value={period} onChange={e => setPeriod(e.target.value as FilterPeriod)}
           className="sm:hidden rounded-[8px] border border-black/[0.08] bg-[#f0efe9] px-2 py-1.5 text-[12px] font-medium outline-none text-[#1a1a18]">
           <option value="today">Aujourd'hui</option>
+          <option value="yesterday">Hier</option>
           <option value="week">7 jours</option>
           <option value="month">Ce mois</option>
           <option value="custom">Période…</option>
@@ -2443,7 +2617,7 @@ export function CashPage() {
                       {/* Rows — mobile: plain tx-row / desktop: luxury card */}
                       <div className="flex flex-col gap-1.5 mb-2">
                       {mvts.map(m => {
-                        const canEdit = m.type === 'depense' || m.type === 'entree' || (m.type === 'client' && appUser?.role === 'owner')
+                        const canEdit = m.type === 'depense' || m.type === 'investissement' || m.type === 'entree' || m.type === 'ouverture' || (m.type === 'client' && appUser?.role === 'owner')
                         const txIdMatch = (m.type === 'vente' || m.type === 'credit') ? m.desc.match(/Vente\s+(F-\S+)/) : null
                         const rowTx = txIdMatch ? txMap.get(txIdMatch[1]) : undefined
                         const sortedCount = rowTx ? (rowTx.sortedLines ?? []).filter(Boolean).length : 0
@@ -2623,7 +2797,7 @@ export function CashPage() {
                               </td>
                             </tr>
                             {mvts.map(m => {
-                              const canEdit2     = m.type==='depense' || m.type==='entree' || (m.type==='client' && appUser?.role==='owner')
+                              const canEdit2     = m.type==='depense' || m.type==='investissement' || m.type==='entree' || m.type==='ouverture' || (m.type==='client' && appUser?.role==='owner')
                               const txIdMatch2   = (m.type==='vente'||m.type==='credit') ? m.desc.match(/Vente\s+(F-\S+)/) : null
                               const rowTx2       = txIdMatch2 ? txMap.get(txIdMatch2[1]) : undefined
                               const sortedCount2 = rowTx2 ? (rowTx2.sortedLines??[]).filter(Boolean).length : 0
@@ -2765,6 +2939,8 @@ export function CashPage() {
               { lbl:'Sorties du jour', val:'-'+fmt(sortiesDay),  sub:'MRU décaissés',  color:'#c0392b' },
               { lbl:'Ventes du jour',  val:fmt(ventesTotal),     sub:ventesDay.length+' vente'+(ventesDay.length!==1?'s':''), color:'#996600' },
               { lbl:'Encaissé factures', val:fmt(encaissTotal),  sub:encaissDay.length+' encaissement'+(encaissDay.length!==1?'s':''), color:'#7c3aed' },
+              { lbl:'Marge brute',  val:fmt(Math.round(beneficeSession)),                             sub:'Prix vente − prix achat', color: beneficeSession >= 0 ? '#1a7a4a' : '#c0392b' },
+              { lbl:'Bénéfice net', val:(beneficeNet>=0?'+':'')+fmt(Math.round(beneficeNet)),         sub:'Marge − dépenses',        color: beneficeNet     >= 0 ? '#1a7a4a' : '#c0392b' },
             ].map(k => (
               <div key={k.lbl} className="relative overflow-hidden mx-3 my-2 rounded-[12px]"
                 style={{
@@ -2788,16 +2964,19 @@ export function CashPage() {
       </>}
 
       {/* Modals */}
-      {modal === 'depense'   && <DepenseModal   onClose={() => setModal(null)} onSave={addMvt}/>}
-      {modal === 'entree'    && <EntreeModal    onClose={() => setModal(null)} onSave={addMvt}/>}
+      {modal === 'depense'        && <DepenseModal        onClose={() => setModal(null)} onSave={addMvt}/>}
+      {modal === 'investissement' && <InvestissementModal onClose={() => setModal(null)} onSave={addMvt}/>}
+      {modal === 'entree'         && <EntreeModal         onClose={() => setModal(null)} onSave={addMvt}/>}
       {modal === 'ouverture' && <OuvertureModal onClose={() => setModal(null)} onSave={(amt, note) => {
         setOuverture(amt)
         setBoutiqueFermee(false)
         addCashMvt({ date:td, time:nowTimeStr(), type:'ouverture' as const, dir:'entree' as const, desc:note, cat:'Ouverture', montant:amt, modes:[{mode:'Cash',amount:amt}] })
       }}/>}
-      {modal === 'cloture'   && <ClotureModal   solde={solde} mouvements={mouvements} ouverture={ouverture} soldeEpargne={soldeEpargne} onClose={() => setModal(null)} onSave={(newOuv, notes, virementFond) => {
-        // Store newOuv in montant so the solde formula can use it correctly after clôture
+      {modal === 'cloture'   && <ClotureModal   solde={solde} mouvements={mouvements} ouverture={ouverture} soldeEpargne={soldeEpargne} beneficeNet={beneficeNet} onClose={() => setModal(null)} onSave={(newOuv, notes, virementFond) => {
         addCashMvt({ date:td, time:nowTimeStr(), type:'cloture' as const, dir:'sortie' as const, desc:'Clôture journée'+(notes?' — '+notes:''), cat:'Clôture', montant:newOuv, modes:[] })
+        const bnAbs = Math.abs(Math.round(beneficeNet))
+        const bnDir: MvtDir = beneficeNet >= 0 ? 'entree' : 'sortie'
+        addCashMvt({ date:td, time:nowTimeStr(), type:'benefice', dir: bnDir, desc:`Bénéfice net — marge ${fmt(Math.round(beneficeNet + depensesJour))} − dépenses ${fmt(depensesJour)} MRU`, cat:'Bénéfice', montant: bnAbs, modes:[] })
         setOuverture(newOuv)
         setBoutiqueFermee(true)
         if (virementFond > 0) {
@@ -2833,7 +3012,19 @@ export function CashPage() {
           }}
         />
       )}
-      {editMvt && (
+      {editMvt?.type === 'ouverture' && (
+        <OuvertureModal
+          initialMontant={editMvt.montant}
+          onClose={() => setEditMvt(null)}
+          onSave={(amt, note) => {
+            const updated = { ...editMvt, montant: amt, desc: note || 'Ouverture de caisse', modes: [{ mode: 'Cash', amount: amt }] }
+            updateCashMvt(updated as unknown as CashMvt)
+            setOuverture(amt)
+            setEditMvt(null)
+          }}
+        />
+      )}
+      {editMvt && editMvt.type !== 'ouverture' && (
         <EditMvtModal
           mvt={editMvt}
           onClose={() => setEditMvt(null)}

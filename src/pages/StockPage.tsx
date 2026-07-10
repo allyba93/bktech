@@ -46,7 +46,7 @@ const newId = () => 'x' + Date.now() + Math.random().toString(36).slice(2)
 
 function mapStoreProduct(sp: {
   id: string; name: string; category: string
-  refs: { id: string; name: string; stock: number; initial?: number; added?: number; sorti?: number; amount?: number; prixVente?: number }[]
+  refs: { id: string; name: string; stock: number; initial?: number; added?: number; sorti?: number; amount?: number; prixVente?: number; prixAchat?: number }[]
 }): Product {
   return {
     id: sp.id, name: sp.name, cat: sp.category,
@@ -54,7 +54,7 @@ function mapStoreProduct(sp: {
       id: r.id, name: r.name, stock: r.stock,
       initial: r.initial ?? 0, added: r.added ?? 0,
       sorti: r.sorti ?? 0, amount: r.amount ?? 0,
-      prixVente: r.prixVente ?? 0,
+      prixVente: r.prixVente ?? 0, prixAchat: r.prixAchat ?? 0,
     })),
     lastCount: (sp as { lastCount?: { qty: number; date: string; time: string } }).lastCount,
   }
@@ -426,11 +426,13 @@ function VenduModal({ product, refId, onClose }: {
     // Targeted ref filter (when opened from a specific ref row)
     const targetRef = refId ? product.refs.find(r => r.id === refId) : undefined
 
-    function lineMatchesProduct(line: { productId?: string; refId?: string; desc?: string }): boolean {
-      // Exact match by productId (most reliable)
+    function lineMatchesProduct(line: { productId?: string; refId?: string; desc?: string; productName?: string }): boolean {
       if (line.productId) return line.productId === product.id
-      // Fallback for old data without productId: match by refId or desc
-      if (line.refId && refIds.has(line.refId)) return true
+      // If refId is present, trust it exclusively — don't fall through to desc
+      if (line.refId) return refIds.has(line.refId)
+      // Old data fallback: productName is more reliable than ref name (product names are unique)
+      if (line.productName) return line.productName.toLowerCase() === product.name.toLowerCase()
+      // Last resort: match by ref name desc (very old data with no productId/refId/productName)
       if (line.desc && refNames.has(line.desc.toLowerCase())) return true
       return false
     }
@@ -511,34 +513,39 @@ function VenduModal({ product, refId, onClose }: {
       .sort((a, b) => b.qty - a.qty)
   }, [history])
 
-  // Aggregate paid/unpaid pcs by client (proportional to payment ratio)
-  const byClientPayment = useMemo(() => {
-    const map = new Map<string, { totalQty: number; paidQty: number; totalAmt: number; paidAmt: number; txCount: number }>()
-    history.forEach(e => {
-      const ratio = e.txTotal > 0 ? Math.min(1, e.txPaid / e.txTotal) : (e.txPaid > 0 ? 1 : 0)
-      const paidQty = e.qty * ratio
-      const paidAmt = e.total * ratio
-      const prev = map.get(e.clientName) ?? { totalQty: 0, paidQty: 0, totalAmt: 0, paidAmt: 0, txCount: 0 }
-      map.set(e.clientName, {
+
+  // Aggregate by date → client (same columns as global byClient but split by day)
+  const byDateClient = useMemo(() => {
+    const toIso = (d: string) => { const [dd, mm, yy] = d.split('/'); return `${yy}-${mm}-${dd}` }
+    const dateMap = new Map<string, Map<string, { totalQty: number; paidQty: number; totalAmt: number; paidAmt: number; txCount: number }>>()
+    for (const e of history) {
+      if (!dateMap.has(e.date)) dateMap.set(e.date, new Map())
+      const cMap = dateMap.get(e.date)!
+      const ratio = e.txTotal > 0 ? Math.min(1, e.txPaid / e.txTotal) : 0
+      const prev = cMap.get(e.clientName) ?? { totalQty: 0, paidQty: 0, totalAmt: 0, paidAmt: 0, txCount: 0 }
+      cMap.set(e.clientName, {
         totalQty: prev.totalQty + e.qty,
-        paidQty:  prev.paidQty  + paidQty,
+        paidQty:  prev.paidQty  + e.qty   * ratio,
         totalAmt: prev.totalAmt + e.total,
-        paidAmt:  prev.paidAmt  + paidAmt,
+        paidAmt:  prev.paidAmt  + e.total * ratio,
         txCount:  prev.txCount  + 1,
       })
-    })
-    return Array.from(map.entries())
-      .map(([name, v]) => ({
-        name,
-        totalQty:  v.totalQty,
-        paidQty:   Math.round(v.paidQty),
-        unpaidQty: v.totalQty - Math.round(v.paidQty),
-        totalAmt:  v.totalAmt,
-        paidAmt:   Math.round(v.paidAmt),
-        unpaidAmt: Math.round(v.totalAmt - v.paidAmt),
-        txCount:   v.txCount,
+    }
+    return Array.from(dateMap.entries())
+      .map(([date, cMap]) => ({
+        date,
+        clients: Array.from(cMap.entries()).map(([name, v]) => ({
+          name,
+          totalQty:  v.totalQty,
+          paidQty:   Math.round(v.paidQty),
+          unpaidQty: v.totalQty - Math.round(v.paidQty),
+          totalAmt:  v.totalAmt,
+          paidAmt:   Math.round(v.paidAmt),
+          unpaidAmt: Math.round(v.totalAmt - v.paidAmt),
+          txCount:   v.txCount,
+        })).sort((a, b) => b.totalQty - a.totalQty),
       }))
-      .sort((a, b) => b.totalQty - a.totalQty)
+      .sort((a, b) => toIso(b.date).localeCompare(toIso(a.date)))
   }, [history])
 
   // Aggregate by reference
@@ -664,111 +671,120 @@ function VenduModal({ product, refId, onClose }: {
               </div>
             )}
 
-            {/* ── Tab: Payé / Dû ── */}
+            {/* ── Tab: Payé / Dû — liste par client groupée par date ── */}
             {tab === 'payment' && (
               <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
-                {/* Mobile: compact cards */}
-                <div className="sm:hidden flex flex-col divide-y divide-black/[0.05]">
-                  {byClientPayment.map((c) => {
-                    const paidPct = c.totalQty > 0 ? Math.round(c.paidQty / c.totalQty * 100) : 100
-                    return (
-                      <div key={c.name} className="px-4 py-3 bg-white">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-[13px] font-medium text-[#111110] truncate">{c.name}</span>
-                          <span className="text-[10px] font-medium text-[#a8a7a2] flex-shrink-0 ml-2">{paidPct}%</span>
-                        </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#fdecea] mb-2">
-                          <div className="h-full rounded-full bg-[#1a7a4a]" style={{ width: `${paidPct}%` }}/>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 text-center">
-                          <div className="rounded-[8px] bg-[#f0efe9] px-2 py-1.5">
-                            <div className="text-[9px] text-[#a8a7a2] uppercase tracking-[.5px]">Total</div>
-                            <div className="font-mono text-[12px] font-semibold text-[#111110]">{fmt(c.totalQty)}</div>
-                            <div className="font-mono text-[10px] text-[#6b6a66]">{fmt(c.totalAmt)}</div>
-                          </div>
-                          <div className="rounded-[8px] bg-[#e8f5ee] px-2 py-1.5">
-                            <div className="text-[9px] text-[#1a7a4a] uppercase tracking-[.5px]">Payé</div>
-                            <div className="font-mono text-[12px] font-semibold text-[#1a7a4a]">{fmt(c.paidQty)}</div>
-                            <div className="font-mono text-[10px] text-[#1a7a4a]">{fmt(c.paidAmt)}</div>
-                          </div>
-                          <div className={cn('rounded-[8px] px-2 py-1.5', c.unpaidQty > 0 ? 'bg-[#fdecea]' : 'bg-[#f0efe9]')}>
-                            <div className={cn('text-[9px] uppercase tracking-[.5px]', c.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>Reste</div>
-                            <div className={cn('font-mono text-[12px] font-semibold', c.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>{c.unpaidQty > 0 ? fmt(c.unpaidQty) : '—'}</div>
-                            <div className={cn('font-mono text-[10px]', c.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>{c.unpaidAmt > 0 ? fmt(c.unpaidAmt) : '—'}</div>
-                          </div>
-                        </div>
+                {byDateClient.map(({ date, clients }) => {
+                  const dayTotalQty  = clients.reduce((s, c) => s + c.totalQty,  0)
+                  const dayPaidQty   = clients.reduce((s, c) => s + c.paidQty,   0)
+                  const dayUnpaidQty = clients.reduce((s, c) => s + c.unpaidQty, 0)
+                  const dayPaidAmt   = clients.reduce((s, c) => s + c.paidAmt,   0)
+                  const dayUnpaidAmt = clients.reduce((s, c) => s + c.unpaidAmt, 0)
+                  return (
+                    <div key={date}>
+                      {/* Date header */}
+                      <div className="sticky top-0 z-10 bg-[#1a1a18] px-5 py-2">
+                        <span className="text-[11px] font-bold uppercase tracking-[.6px] text-white/70">{date}</span>
                       </div>
-                    )
-                  })}
-                  {/* Mobile total row */}
-                  <div className="px-4 py-3 bg-[#f8f7f3]">
-                    <div className="text-[11px] font-semibold text-[#6b6a66] uppercase tracking-[.5px] mb-2">Total général</div>
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="rounded-[8px] bg-white px-2 py-1.5 border border-black/[0.08]">
-                        <div className="text-[9px] text-[#a8a7a2] uppercase tracking-[.5px]">Total</div>
-                        <div className="font-mono text-[12px] font-bold text-[#111110]">{fmt(byClientPayment.reduce((s,c)=>s+c.totalQty,0))}</div>
-                        <div className="font-mono text-[10px] text-[#6b6a66]">{fmt(byClientPayment.reduce((s,c)=>s+c.totalAmt,0))}</div>
+
+                      {/* Client rows — mobile */}
+                      <div className="sm:hidden flex flex-col divide-y divide-black/[0.05]">
+                        {clients.map(c => {
+                          const paidPct = c.totalQty > 0 ? Math.round(c.paidQty / c.totalQty * 100) : 100
+                          return (
+                            <div key={c.name} className="px-4 py-3 bg-white">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <span className="text-[13px] font-medium text-[#111110] truncate">{c.name}</span>
+                                <span className="text-[10px] font-medium text-[#a8a7a2] flex-shrink-0 ml-2">{paidPct}%</span>
+                              </div>
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#fdecea] mb-2">
+                                <div className="h-full rounded-full bg-[#1a7a4a]" style={{ width: `${paidPct}%` }}/>
+                              </div>
+                              <div className="grid grid-cols-3 gap-2 text-center">
+                                <div className="rounded-[8px] bg-[#f0efe9] px-2 py-1.5">
+                                  <div className="text-[9px] text-[#a8a7a2] uppercase tracking-[.5px]">Total</div>
+                                  <div className="font-mono text-[12px] font-semibold text-[#111110]">{fmt(c.totalQty)}</div>
+                                  <div className="font-mono text-[10px] text-[#6b6a66]">{fmtMRU(c.totalAmt)}</div>
+                                </div>
+                                <div className="rounded-[8px] bg-[#e8f5ee] px-2 py-1.5">
+                                  <div className="text-[9px] text-[#1a7a4a] uppercase tracking-[.5px]">Payé</div>
+                                  <div className="font-mono text-[12px] font-semibold text-[#1a7a4a]">{fmt(c.paidQty)}</div>
+                                  <div className="font-mono text-[10px] text-[#1a7a4a]">{fmtMRU(c.paidAmt)}</div>
+                                </div>
+                                <div className={cn('rounded-[8px] px-2 py-1.5', c.unpaidQty > 0 ? 'bg-[#fdecea]' : 'bg-[#f0efe9]')}>
+                                  <div className={cn('text-[9px] uppercase tracking-[.5px]', c.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>Reste</div>
+                                  <div className={cn('font-mono text-[12px] font-semibold', c.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>{c.unpaidQty > 0 ? fmt(c.unpaidQty) : '—'}</div>
+                                  <div className={cn('font-mono text-[10px]', c.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>{c.unpaidAmt > 0 ? fmtMRU(c.unpaidAmt) : '—'}</div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
-                      <div className="rounded-[8px] bg-white px-2 py-1.5 border border-[#1a7a4a]/30">
-                        <div className="text-[9px] text-[#1a7a4a] uppercase tracking-[.5px]">Payé</div>
-                        <div className="font-mono text-[12px] font-bold text-[#1a7a4a]">{fmt(byClientPayment.reduce((s,c)=>s+c.paidQty,0))}</div>
-                        <div className="font-mono text-[10px] text-[#1a7a4a]">{fmt(byClientPayment.reduce((s,c)=>s+c.paidAmt,0))}</div>
-                      </div>
-                      <div className="rounded-[8px] bg-white px-2 py-1.5 border border-[#c0392b]/30">
-                        <div className="text-[9px] text-[#c0392b] uppercase tracking-[.5px]">Reste</div>
-                        <div className="font-mono text-[12px] font-bold text-[#c0392b]">{fmt(byClientPayment.reduce((s,c)=>s+c.unpaidQty,0))}</div>
-                        <div className="font-mono text-[10px] text-[#c0392b]">{fmt(byClientPayment.reduce((s,c)=>s+c.unpaidAmt,0))}</div>
+
+                      {/* Client rows — desktop */}
+                      <div className="hidden sm:block overflow-x-auto">
+                        <table className="w-full text-[12px]" style={{ minWidth: 480 }}>
+                          <thead>
+                            <tr className="border-b border-black/[0.08] bg-[#f8f7f3]">
+                              <th className="px-5 py-2 text-left text-[11px] font-semibold uppercase tracking-[.5px] text-[#6b6a66]">Client</th>
+                              <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#6b6a66]">Total pcs</th>
+                              <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#1a7a4a]">Payé pcs</th>
+                              <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#c0392b]">Reste pcs</th>
+                              <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#1a7a4a]">Payé MRU</th>
+                              <th className="px-4 py-2 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#c0392b]">Reste MRU</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {clients.map((c, i) => {
+                              const paidPct = c.totalQty > 0 ? Math.round(c.paidQty / c.totalQty * 100) : 100
+                              return (
+                                <tr key={c.name} className={cn('border-b border-black/[0.05] last:border-0', i % 2 === 0 ? 'bg-white' : 'bg-[#fafaf8]')}>
+                                  <td className="px-5 py-2.5">
+                                    <div className="text-[12px] font-medium text-[#111110]">{c.name}</div>
+                                    <div className="mt-1 flex items-center gap-1.5">
+                                      <div className="h-1 flex-1 overflow-hidden rounded-full bg-[#fdecea]">
+                                        <div className="h-full rounded-full bg-[#1a7a4a]" style={{ width: `${paidPct}%` }}/>
+                                      </div>
+                                      <span className="text-[9px] font-medium text-[#a8a7a2]">{paidPct}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right font-mono font-semibold text-[#111110]">{fmt(c.totalQty)}</td>
+                                  <td className="px-4 py-2.5 text-right font-mono font-semibold text-[#1a7a4a]">{fmt(c.paidQty)}</td>
+                                  <td className="px-4 py-2.5 text-right font-mono font-semibold text-[#c0392b]">{c.unpaidQty > 0 ? fmt(c.unpaidQty) : '—'}</td>
+                                  <td className="px-4 py-2.5 text-right font-mono text-[#1a7a4a]">{fmtMRU(c.paidAmt)}</td>
+                                  <td className="px-4 py-2.5 text-right font-mono text-[#c0392b]">{c.unpaidAmt > 0 ? fmtMRU(c.unpaidAmt) : '—'}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                          {/* Total row for this date */}
+                          <tfoot>
+                            <tr className="border-t-2 border-black/[0.12] bg-[#f0f0ec] font-semibold">
+                              <td className="px-5 py-2 text-[11px] uppercase tracking-[.5px] text-[#6b6a66]">Total · {date}</td>
+                              <td className="px-4 py-2 text-right font-mono text-[#111110]">{fmt(dayTotalQty)}</td>
+                              <td className="px-4 py-2 text-right font-mono text-[#1a7a4a]">{fmt(dayPaidQty)}</td>
+                              <td className="px-4 py-2 text-right font-mono text-[#c0392b]">{dayUnpaidQty > 0 ? fmt(dayUnpaidQty) : '—'}</td>
+                              <td className="px-4 py-2 text-right font-mono text-[#1a7a4a]">{fmtMRU(dayPaidAmt)}</td>
+                              <td className="px-4 py-2 text-right font-mono text-[#c0392b]">{dayUnpaidAmt > 0 ? fmtMRU(dayUnpaidAmt) : '—'}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
                       </div>
                     </div>
+                  )
+                })}
+
+                {/* Grand total */}
+                <div className="hidden sm:flex items-center border-t-2 border-black/[0.15] bg-[#f8f7f3]">
+                  <div className="px-5 py-2.5 text-[11px] font-bold uppercase tracking-[.5px] text-[#6b6a66] w-[200px]">Total général</div>
+                  <div className="flex-1 grid grid-cols-5 text-right">
+                    <div className="px-4 py-2.5 font-mono font-bold text-[#111110]">{fmt(byDateClient.flatMap(d=>d.clients).reduce((s,c)=>s+c.totalQty,0))}</div>
+                    <div className="px-4 py-2.5 font-mono font-bold text-[#1a7a4a]">{fmt(byDateClient.flatMap(d=>d.clients).reduce((s,c)=>s+c.paidQty,0))}</div>
+                    <div className="px-4 py-2.5 font-mono font-bold text-[#c0392b]">{fmt(byDateClient.flatMap(d=>d.clients).reduce((s,c)=>s+c.unpaidQty,0))}</div>
+                    <div className="px-4 py-2.5 font-mono font-bold text-[#1a7a4a]">{fmtMRU(byDateClient.flatMap(d=>d.clients).reduce((s,c)=>s+c.paidAmt,0))}</div>
+                    <div className="px-4 py-2.5 font-mono font-bold text-[#c0392b]">{fmtMRU(byDateClient.flatMap(d=>d.clients).reduce((s,c)=>s+c.unpaidAmt,0))}</div>
                   </div>
-                </div>
-                {/* Desktop: table */}
-                <div className="hidden sm:block overflow-x-auto">
-                  <table className="w-full text-[12px]" style={{ minWidth: 480 }}>
-                    <thead>
-                      <tr className="border-b border-black/[0.08] bg-[#f8f7f3]">
-                        <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[.5px] text-[#6b6a66]">Client</th>
-                        <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#6b6a66]">Total pcs</th>
-                        <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#1a7a4a]">Payé pcs</th>
-                        <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#c0392b]">Reste pcs</th>
-                        <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#1a7a4a]">Payé MRU</th>
-                        <th className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-[.5px] text-[#c0392b]">Reste MRU</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {byClientPayment.map((c, i) => {
-                        const paidPct = c.totalQty > 0 ? Math.round(c.paidQty / c.totalQty * 100) : 100
-                        return (
-                          <tr key={c.name} className={cn('border-b border-black/[0.05] last:border-0', i % 2 === 0 ? 'bg-white' : 'bg-[#fafaf8]')}>
-                            <td className="px-5 py-2.5">
-                              <div className="text-[12px] font-medium text-[#111110]">{c.name}</div>
-                              <div className="mt-1 flex items-center gap-1.5">
-                                <div className="h-1 flex-1 overflow-hidden rounded-full bg-[#fdecea]">
-                                  <div className="h-full rounded-full bg-[#1a7a4a]" style={{ width: `${paidPct}%` }}/>
-                                </div>
-                                <span className="text-[9px] font-medium text-[#a8a7a2]">{paidPct}%</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-[#111110]">{fmt(c.totalQty)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-[#1a7a4a]">{fmt(c.paidQty)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono font-semibold text-[#c0392b]">{c.unpaidQty > 0 ? fmt(c.unpaidQty) : '—'}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-[#1a7a4a]">{fmtMRU(c.paidAmt)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-[#c0392b]">{c.unpaidAmt > 0 ? fmtMRU(c.unpaidAmt) : '—'}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t-2 border-black/[0.12] bg-[#f8f7f3] font-semibold">
-                        <td className="px-5 py-2.5 text-[11px] uppercase tracking-[.5px] text-[#6b6a66]">Total</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[#111110]">{fmt(byClientPayment.reduce((s,c)=>s+c.totalQty,0))}</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[#1a7a4a]">{fmt(byClientPayment.reduce((s,c)=>s+c.paidQty,0))}</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[#c0392b]">{fmt(byClientPayment.reduce((s,c)=>s+c.unpaidQty,0))}</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[#1a7a4a]">{fmtMRU(byClientPayment.reduce((s,c)=>s+c.paidAmt,0))}</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-[#c0392b]">{fmtMRU(byClientPayment.reduce((s,c)=>s+c.unpaidAmt,0))}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
                 </div>
               </div>
             )}
@@ -1317,6 +1333,9 @@ export function StockPage() {
   const updateStockRef            = useAppStore(s => s.updateStockRef)
   const setProductCount           = useAppStore(s => s.setProductCount)
   const recalculateStockFromSortie = useAppStore(s => s.recalculateStockFromSortie)
+  const cashMvts       = useAppStore(s => s.cashMvts)
+  const ventesComptoir = useAppStore(s => s.ventesComptoir)
+  const clients        = useAppStore(s => s.clients)
   const appUser        = useAuthStore(s => s.appUser)
   const isOwner        = appUser?.role === 'owner'
 
@@ -1329,6 +1348,7 @@ export function StockPage() {
   const [search,        setSearch]       = useState('')
   const [catFilter,     setCatFilter]    = useState('all')
   const [statusFilter,  setStatusFilter] = useState<'all'|'ok'|'diff'>('all')
+  const [kpiOpen,       setKpiOpen]      = useState(false)
   const [detailModal,   setDetailModal]  = useState<Product | null>(null)
 
   // Keep detailModal in sync with the store so lastCount/stock updates appear immediately
@@ -1363,12 +1383,49 @@ export function StockPage() {
       }
       if (q && !p.name.toLowerCase().includes(q) && !p.cat.toLowerCase().includes(q)) return false
       return true
-    })
+    }).sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
   }, [products, search, catFilter, statusFilter])
 
-  const totalDispo = useMemo(() => products.reduce((s, p) => s + p.refs.reduce((sr, r) => sr + r.stock, 0), 0), [products])
-  const totalSorti = useMemo(() => products.reduce((s, p) => s + p.refs.reduce((sr, r) => sr + r.sorti, 0), 0), [products])
-  const nok        = useMemo(() => products.filter(p => productTrackStatus(p) === 'diff').length, [products])
+  const totalDispo  = useMemo(() => products.reduce((s, p) => s + p.refs.reduce((sr, r) => sr + r.stock, 0), 0), [products])
+  const totalSorti  = useMemo(() => products.reduce((s, p) => s + p.refs.reduce((sr, r) => sr + r.sorti, 0), 0), [products])
+  const nok         = useMemo(() => products.filter(p => productTrackStatus(p) === 'diff').length, [products])
+  const valeurStock = useMemo(() => products.reduce((s, p) => s + p.refs.reduce((sr, r) => sr + r.stock * (r.prixAchat ?? 0), 0), 0), [products])
+
+  const beneficeSession = useMemo(() => {
+    // Parse DD/MM/YYYY HH:MM → timestamp
+    const parseTs = (date: string, time: string) => {
+      const [d, m, y] = date.split('/')
+      return new Date(`${y}-${m}-${d}T${time || '00:00'}:00`).getTime()
+    }
+    // Find last ouverture
+    const lastOuv = [...cashMvts]
+      .sort((a, b) => parseTs(b.date, b.time) - parseTs(a.date, a.time))
+      .find(m => m.type === 'ouverture')
+    if (!lastOuv) return null
+    const sessionStart = parseTs(lastOuv.date, lastOuv.time)
+
+    // All vente cashMvts in current session
+    const sessionVentes = cashMvts.filter(m =>
+      m.type === 'vente' && parseTs(m.date, m.time) >= sessionStart
+    )
+
+    // Build lookup maps
+    const allTxs = [...ventesComptoir, ...clients.flatMap(c => c.transactions)]
+    const txMap = new Map(allTxs.map(tx => [tx.id, tx]))
+    const refCostMap = new Map<string, number>()
+    for (const p of products) for (const r of p.refs) refCostMap.set(r.id, r.prixAchat ?? 0)
+
+    return sessionVentes.reduce((total, mvt) => {
+      const match = mvt.desc.match(/Vente\s+(F-\S+)/)
+      if (!match) return total + mvt.montant
+      const tx = txMap.get(match[1])
+      if (!tx) return total + mvt.montant
+      return total + tx.lines.reduce((s, l) => {
+        const cost = l.refId ? (refCostMap.get(l.refId) ?? 0) : 0
+        return s + (l.pu - cost) * l.qty
+      }, 0)
+    }, 0)
+  }, [cashMvts, ventesComptoir, clients, products])
 
   function updateStock(pid: string, rid: string, newStock: number) {
     const p = products.find(x => x.id === pid); if (!p) return
@@ -1433,13 +1490,14 @@ export function StockPage() {
         </div>
       </div>
 
-      {/* ── KPIs ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-4 md:px-8 py-4 flex-shrink-0">
+      {/* ── KPIs — desktop grid ── */}
+      <div className="hidden sm:grid sm:grid-cols-5 gap-3 px-4 md:px-8 py-4 flex-shrink-0">
         {[
-          { label: 'Disponible',  value: fmt(totalDispo),         sub: 'unités en stock',    cls: 'kpi-blue',  color: '#1a5fa8' },
-          { label: 'Total vendu', value: fmt(totalSorti),         sub: 'unités vendues',     cls: 'kpi-amber', color: '#996600' },
-          { label: 'Produits',    value: String(products.length), sub: 'références actives', cls: 'kpi-green', color: '#1a7a4a' },
-          { label: 'NOK',         value: String(nok),             sub: 'écarts détectés',    cls: nok > 0 ? 'kpi-red' : 'kpi-blue', color: nok > 0 ? '#c0392b' : '#1a5fa8' },
+          { label: 'Disponible',  value: fmt(totalDispo),                                       sub: 'unités en stock',     cls: 'kpi-blue',  color: '#1a5fa8' },
+          { label: 'Total vendu', value: fmt(totalSorti),                                       sub: 'unités vendues',      cls: 'kpi-amber', color: '#996600' },
+          { label: 'Valeur',      value: fmt(valeurStock),                                      sub: 'montant achat stock', cls: 'kpi-green', color: '#1a7a4a' },
+          { label: 'Bénéfice',    value: beneficeSession !== null ? fmt(beneficeSession) : '—', sub: 'session en cours',    cls: beneficeSession !== null && beneficeSession >= 0 ? 'kpi-green' : 'kpi-red', color: beneficeSession !== null && beneficeSession >= 0 ? '#1a7a4a' : '#c0392b' },
+          { label: 'NOK',         value: String(nok),                                           sub: 'écarts détectés',     cls: nok > 0 ? 'kpi-red' : 'kpi-blue', color: nok > 0 ? '#c0392b' : '#1a5fa8' },
         ].map(s => (
           <div key={s.label} className={`${s.cls} px-4 py-3`}>
             <div className="text-[10px] font-bold uppercase tracking-[.6px]" style={{ color: s.color }}>{s.label}</div>
@@ -1447,6 +1505,53 @@ export function StockPage() {
             <div className="mt-1 text-[11px] text-[#a8a7a2]">{s.sub}</div>
           </div>
         ))}
+      </div>
+
+      {/* ── KPIs — mobile collapsible ── */}
+      <div className="sm:hidden flex-shrink-0 border-b border-black/[0.08]">
+        <button
+          onClick={() => setKpiOpen(o => !o)}
+          className="w-full flex items-center justify-between px-3 py-2 border-none cursor-pointer"
+          style={{ background: 'linear-gradient(135deg,#f0f4ff 0%,#e8f0fb 100%)' }}>
+          <div className="flex items-center gap-3">
+            <div className="text-left">
+              <div className="text-[9px] font-bold uppercase tracking-[.6px] text-[#1a5fa8]">Disponible</div>
+              <div className="font-mono text-[15px] font-bold leading-none text-[#1a5fa8]">{fmt(totalDispo)} <span className="text-[10px] font-normal text-[#a8a7a2]">u.</span></div>
+            </div>
+            <div className="h-6 w-px bg-black/[0.1]"/>
+            <div className="text-left">
+              <div className="text-[9px] font-bold uppercase tracking-[.6px] text-[#996600]">Valeur</div>
+              <div className="font-mono text-[15px] font-bold leading-none text-[#996600]">{fmt(valeurStock)} <span className="text-[10px] font-normal text-[#a8a7a2]">MRU</span></div>
+            </div>
+            {nok > 0 && <>
+              <div className="h-6 w-px bg-black/[0.1]"/>
+              <div className="text-left">
+                <div className="text-[9px] font-bold uppercase tracking-[.6px] text-[#c0392b]">NOK</div>
+                <div className="font-mono text-[15px] font-bold leading-none text-[#c0392b]">{nok}</div>
+              </div>
+            </>}
+          </div>
+          <svg className={`h-3.5 w-3.5 text-[#a8a7a2] flex-shrink-0 transition-transform ${kpiOpen ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="6,9 12,15 18,9"/></svg>
+        </button>
+        {kpiOpen && (
+          <div className="px-3 pb-3 pt-1 flex flex-col gap-2" style={{ background: 'linear-gradient(135deg,#f0f4ff 0%,#e8f0fb 100%)' }}>
+            {[
+              { label: 'Disponible',  value: fmt(totalDispo),                                       sub: 'unités en stock',     color: '#1a5fa8' },
+              { label: 'Total vendu', value: fmt(totalSorti),                                       sub: 'unités vendues',      color: '#996600' },
+              { label: 'Valeur',      value: fmt(valeurStock),                                      sub: 'montant achat stock', color: '#1a7a4a' },
+              { label: 'Bénéfice',    value: beneficeSession !== null ? fmt(beneficeSession) : '—', sub: 'session en cours',    color: beneficeSession !== null && beneficeSession >= 0 ? '#1a7a4a' : '#c0392b' },
+              { label: 'NOK',         value: String(nok),                                           sub: 'écarts détectés',     color: nok > 0 ? '#c0392b' : '#1a5fa8' },
+            ].map(k => (
+              <div key={k.label} className="flex items-center justify-between rounded-[10px] bg-white/70 px-3 py-2.5" style={{ border: '1px solid rgba(200,175,100,0.18)' }}>
+                <div className="text-[12px] font-medium text-[#6b6a66]">{k.label}</div>
+                <div className="text-right">
+                  <div className="font-mono text-[14px] font-bold leading-none" style={{ color: k.color }}>{k.value}</div>
+                  <div className="text-[9px] text-[#a8a7a2] mt-0.5">{k.sub}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Filters ── */}

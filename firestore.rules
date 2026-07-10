@@ -20,6 +20,10 @@ service cloud.firestore {
       return isAuth() && (getRole() == 'owner' || getRole() == 'caissier');
     }
 
+    function isChineOrOwner() {
+      return isAuth() && (getRole() == 'owner' || getRole() == 'chine');
+    }
+
     // Users — any authenticated user can read; owner can write; user can write own doc
     match /users/{userId} {
       allow read:  if isAuth();
@@ -93,6 +97,11 @@ service cloud.firestore {
     // Settings (caisse ouverture, boutiqueFermee, epargne solde)
     match /settings/{settingId} {
       allow read, write: if isAuth();
+    }
+
+    // China orders — owner or chine role
+    match /chinaOrders/{orderId} {
+      allow read, write: if isChineOrOwner();
     }
 
     // Legacy collection names (keep for backwards compatibility)
