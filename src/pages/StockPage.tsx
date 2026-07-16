@@ -188,7 +188,6 @@ function ProductDetailModal({ product, categories, visible, onClose, onUpdateSto
   onEdit: () => void
   onVenduRef: (refId: string) => void
   onVendu: () => void
-  onDelete?: () => void
   onSetProductCount: (qty: number) => void
 }) {
   const [deltas, setDeltas] = useState<Record<string, number>>({})
@@ -373,13 +372,6 @@ function ProductDetailModal({ product, categories, visible, onClose, onUpdateSto
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-black/[0.08] px-6 py-3.5 flex-shrink-0">
           <div className="flex items-center gap-2">
-            {onDelete && (
-              <button onClick={onDelete}
-                className="flex items-center gap-1.5 rounded-lg border border-[#c0392b] bg-[#fdecea] px-3 py-1.5 text-[13px] font-medium text-[#c0392b] cursor-pointer hover:opacity-80">
-                <Trash2 size={13} />
-                Supprimer
-              </button>
-            )}
             <button onClick={onVendu}
               className="flex items-center gap-1.5 rounded-lg border border-[#1a5fa8]/40 bg-[#e8f0fb] px-3 py-1.5 text-[13px] font-medium text-[#1a5fa8] cursor-pointer hover:opacity-80">
               <BarChart2 size={13} />
@@ -1381,7 +1373,7 @@ export function StockPage() {
         if (statusFilter === 'ok'   && s !== 'ok')   return false
         if (statusFilter === 'diff' && s !== 'diff')  return false
       }
-      if (q && !p.name.toLowerCase().includes(q) && !p.cat.toLowerCase().includes(q)) return false
+      if (q && !p.name.toLowerCase().includes(q) && !(p.cat ?? '').toLowerCase().includes(q)) return false
       return true
     }).sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
   }, [products, search, catFilter, statusFilter])
@@ -1445,11 +1437,7 @@ export function StockPage() {
     }
   }
 
-  function handleDeleteProduct(p: Product) {
-    if (!window.confirm(`Supprimer "${p.name}" définitivement ?`)) return
-    setDetailModal(null)
-    deleteProduct(p.id)
-  }
+
 
   const visColList = ALL_COLS.filter(c => visibleCols.has(c.id))
 
@@ -1794,7 +1782,6 @@ export function StockPage() {
           onEdit={() => { setProductModal({ product: detailModal }); setDetailModal(null) }}
           onVenduRef={rid => setVenduModal({ product: detailModal, refId: rid })}
           onVendu={() => { setVenduModal({ product: detailModal }); setDetailModal(null) }}
-          onDelete={isOwner ? () => handleDeleteProduct(detailModal) : undefined}
           onSetProductCount={qty => setProductCount(detailModal.id, qty)}
         />
       )}

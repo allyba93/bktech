@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Search, Plus, X, Check } from 'lucide-react'
+import { Search, Plus, X, Check, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/appStore'
 import type { Client as AppClient, AvanceMvt } from '@/store/appStore'
@@ -292,7 +292,7 @@ function AvanceModal({ action, solde, onClose, onSave }: {
   onClose: () => void
   onSave: (mvt: Omit<AvanceMvt, 'id'>, stockLines: StockLine[]) => void
 }) {
-  const { categories, addCategory, addProduct } = useAppStore()
+  const { categories, addCategory, addProduct, products } = useAppStore()
   const cfg = AVANCE_COLORS[action]
   const [desc, setDesc] = useState('')
   const [mode, setMode] = useState('Cash')
@@ -301,7 +301,14 @@ function AvanceModal({ action, solde, onClose, onSave }: {
   const [montant, setMontant] = useState('')
   const amt = parseFloat(montant) || 0
 
-  // facture — product form
+  // facture — mode toggle
+  const [existMode, setExistMode] = useState<'new' | 'exist'>('new')
+  const [existProdId, setExistProdId] = useState('')
+  const [existRefs, setExistRefs] = useState<Array<{ refId: string; name: string; qty: string; pu: string }>>([])
+  const existProd = products.find(p => p.id === existProdId) ?? null
+  const existMontant = existRefs.reduce((s, r) => s + (parseInt(r.qty) || 0) * (parseFloat(r.pu) || 0), 0)
+
+  // facture — new product form
   const [prodName,    setProdName]    = useState('')
   const [catId,       setCatId]       = useState('')
   const [newCatName,  setNewCatName]  = useState('')
@@ -371,6 +378,58 @@ function AvanceModal({ action, solde, onClose, onSave }: {
 
           {/* ── Facture / marchandise reçue ── */}
           {action === 'facture' && (<>
+            {/* Mode toggle */}
+            <div className="flex rounded-[9px] border border-black/[0.08] bg-[#f0efe9] p-0.5">
+              <button type="button" onClick={() => setExistMode('new')}
+                className={cn('flex-1 rounded-[7px] py-1.5 text-[12px] font-medium transition-all cursor-pointer border-none', existMode === 'new' ? 'bg-white shadow-sm text-[#1a1a18]' : 'bg-transparent text-[#6b6a66]')}>
+                Nouveau produit
+              </button>
+              <button type="button" onClick={() => setExistMode('exist')}
+                className={cn('flex-1 rounded-[7px] py-1.5 text-[12px] font-medium transition-all cursor-pointer border-none', existMode === 'exist' ? 'bg-white shadow-sm text-[#1a1a18]' : 'bg-transparent text-[#6b6a66]')}>
+                Produit existant
+              </button>
+            </div>
+
+            {/* ── Exist mode: select product + update refs ── */}
+            {existMode === 'exist' && (<>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-medium uppercase tracking-wide text-[#6b6a66]">Produit</label>
+                <select value={existProdId} onChange={e => {
+                  const pid = e.target.value
+                  setExistProdId(pid)
+                  const prod = products.find(p => p.id === pid)
+                  setExistRefs(prod ? prod.refs.map(r => ({ refId: r.id, name: r.name, qty: '', pu: String(r.prixAchat ?? 0) })) : [])
+                }} className={inCls + ' cursor-pointer'}>
+                  <option value="">Choisir un produit…</option>
+                  {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              {existProd && existRefs.length > 0 && (
+                <div>
+                  <div className="mb-1 grid gap-2 px-1 text-[10px] font-medium uppercase tracking-wide text-[#a8a7a2]"
+                    style={{ gridTemplateColumns: '1fr 60px 80px' }}>
+                    <span>Référence</span><span className="text-center">Qté</span><span className="text-right">P. achat</span>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {existRefs.map((r, i) => (
+                      <div key={r.refId} className="grid items-center gap-2 rounded-xl border border-black/[0.08] bg-[#f8f7f3] px-3 py-2.5"
+                        style={{ gridTemplateColumns: '1fr 60px 80px' }}>
+                        <span className="truncate text-[12px] text-[#1a1a18]">{r.name}</span>
+                        <input type="number" min={0} value={r.qty}
+                          onChange={e => setExistRefs(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
+                          placeholder="Qté" className={cn(rInCls, 'text-center font-mono')}/>
+                        <input type="number" min={0} value={r.pu}
+                          onChange={e => setExistRefs(prev => prev.map((x, j) => j === i ? { ...x, pu: e.target.value } : x))}
+                          placeholder="Achat" className={cn(rInCls, 'text-right font-mono')}/>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>)}
+
+            {/* ── New mode: create product ── */}
+            {existMode === 'new' && (<>
             {/* Nom du produit */}
             <div className="flex flex-col gap-1.5">
               <label className="text-[11px] font-medium uppercase tracking-wide text-[#6b6a66]">Nom du produit</label>
@@ -467,6 +526,7 @@ function AvanceModal({ action, solde, onClose, onSave }: {
                 ))}
               </div>
             </div>
+            </>)}
 
             {/* Référence facture */}
             <div className="flex flex-col gap-1.5">
@@ -474,9 +534,14 @@ function AvanceModal({ action, solde, onClose, onSave }: {
               <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="ex: facture n°123" className={inCls}/>
             </div>
 
-            {factureMontant > 0 && (
+            {existMode === 'new' && factureMontant > 0 && (
               <div className="flex justify-end text-[13px] font-medium" style={{ color: cfg.color }}>
                 Valeur totale reçue : {f(factureMontant)} MRU
+              </div>
+            )}
+            {existMode === 'exist' && existMontant > 0 && (
+              <div className="flex justify-end text-[13px] font-medium" style={{ color: cfg.color }}>
+                Valeur totale reçue : {f(existMontant)} MRU
               </div>
             )}
           </>)}
@@ -489,6 +554,19 @@ function AvanceModal({ action, solde, onClose, onSave }: {
               if (!amt || amt <= 0) { alert('Montant invalide'); return }
               if (solde > 0 && amt > solde) { alert(`Maximum versable : ${f(solde)} MRU`); return }
               onSave({ date: todayStr(), time: nowTimeStr(), type: 'versement', dir: 'debit', montant: amt, desc: desc || cfg.label, modes: [{ mode, amount: amt }] }, [])
+            } else if (existMode === 'exist') {
+              if (!existProdId) { alert('Choisissez un produit'); return }
+              const validRefs = existRefs.filter(r => parseInt(r.qty) > 0)
+              if (!validRefs.length) { alert('Entrez au moins une quantité'); return }
+              const total = validRefs.reduce((s, r) => s + (parseInt(r.qty) || 0) * (parseFloat(r.pu) || 0), 0)
+              const mvtLines = validRefs.map(r => {
+                const qty = parseInt(r.qty) || 0; const pu = parseFloat(r.pu) || 0
+                return { desc: r.name, productName: existProd?.name ?? '', qty, pu, total: qty * pu }
+              })
+              onSave({
+                date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit',
+                montant: total, desc: desc || `${existProd?.name ?? ''} — stock reçu`, modes: [], lines: mvtLines,
+              }, validRefs.map(r => ({ productId: existProdId, refId: r.refId, qty: parseInt(r.qty) || 0, pu: parseFloat(r.pu) || 0 })))
             } else {
               if (!prodName.trim()) { alert('Entrez le nom du produit'); return }
               if (!selectedCat) { alert('Choisissez une catégorie'); return }
@@ -502,7 +580,7 @@ function AvanceModal({ action, solde, onClose, onSave }: {
               }
               const pv = isSamePrice ? (parseFloat(sharedPrix) || 0) : 0
               const pa = isSamePrice ? (parseFloat(sharedAchat) || 0) : 0
-              const prodId = await addProduct({
+              await addProduct({
                 name: prodName.trim(), category: selectedCat.name,
                 refs: valid.map(r => ({
                   id: frefId(), name: r.name.trim(),
@@ -522,8 +600,7 @@ function AvanceModal({ action, solde, onClose, onSave }: {
                 const qty = parseInt(r.qty) || 0
                 return { desc: r.name.trim(), productName: prodName.trim(), qty, pu: rpa, total: qty * rpa }
               })
-              onSave({ date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit', montant: total, desc: desc || `${prodName} — ${valid.length} réf.`, modes: [], lines: mvtLines },
-                valid.map(r => ({ productId: prodId, refId: r.id, qty: parseInt(r.qty) || 0, pu: isSamePrice ? pa : (parseFloat(r.prixAchat) || 0) })))
+              onSave({ date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit', montant: total, desc: desc || `${prodName} — ${valid.length} réf.`, modes: [], lines: mvtLines }, [])
             }
           }} className={cn('flex items-center gap-1.5 rounded-[9px] border-none px-4 py-2 text-[13px] font-medium text-white cursor-pointer', cfg.btnCls)}>
             <Check size={13}/> Enregistrer
@@ -535,11 +612,97 @@ function AvanceModal({ action, solde, onClose, onSave }: {
 }
 
 // ─── Avances tab ──────────────────────────────────────────────────────────────
+function EditAvanceModal({ mvt, onClose, onSave, onDelete }: {
+  mvt: AvanceMvt
+  onClose: () => void
+  onSave: (updated: AvanceMvt) => void
+  onDelete: () => void
+}) {
+  const [montant, setMontant] = useState(String(mvt.montant))
+  const [desc,    setDesc]    = useState(mvt.desc ?? '')
+  const [mode,    setMode]    = useState(mvt.modes[0]?.mode ?? 'Cash')
+  const [confirm, setConfirm] = useState(false)
+
+  const typeLabel: Record<AvanceMvt['type'], string> = {
+    depot: 'Dépôt', facture: 'Facture reçue', versement: 'Versement', achat: 'Achat sur avoir',
+  }
+  const typeColor: Record<AvanceMvt['type'], string> = {
+    depot: '#1a7a4a', facture: '#1a5fa8', versement: '#c0392b', achat: '#996600',
+  }
+  const color = typeColor[mvt.type]
+  const inCls = 'rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-2 text-[13px] outline-none focus:border-[#1a1a18] focus:bg-white w-full'
+
+  const handleSave = () => {
+    const amt = parseFloat(montant)
+    if (!amt || amt <= 0) return
+    onSave({
+      ...mvt,
+      montant: amt,
+      desc: desc.trim() || mvt.desc,
+      modes: mvt.type === 'facture' ? [] : [{ mode, amount: amt }],
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/45" onClick={onClose}>
+      <div className="flex flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-black/[0.08] bg-white w-full sm:w-[400px]" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
+          <div>
+            <h2 className="text-[15px] font-medium">Modifier l'avoir</h2>
+            <div className="mt-0.5 text-[11px]" style={{ color }}>
+              {typeLabel[mvt.type]} · {mvt.date}
+            </div>
+          </div>
+          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg border-none bg-[#f0efe9] cursor-pointer"><X size={13} className="text-[#6b6a66]"/></button>
+        </div>
+        <div className="flex flex-col gap-3.5 p-5">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] font-medium text-[#6b6a66]">Montant (MRU)</label>
+            <input type="number" autoFocus value={montant} onChange={e => setMontant(e.target.value)} placeholder="0" className={inCls}/>
+          </div>
+          {mvt.type !== 'facture' && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[12px] font-medium text-[#6b6a66]">Mode de paiement</label>
+              <select value={mode} onChange={e => setMode(e.target.value)} className={inCls + ' cursor-pointer'}>
+                {CHANNELS.map(c => <option key={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] font-medium text-[#6b6a66]">Description</label>
+            <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Note…" className={inCls}/>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-black/[0.08] px-5 py-3">
+          {confirm
+            ? <div className="flex items-center gap-2">
+                <span className="text-[12px] text-[#c0392b]">Supprimer ?</span>
+                <button onClick={onDelete} className="rounded-[9px] border-none bg-[#c0392b] px-3 py-1.5 text-[12px] font-medium text-white cursor-pointer">Oui</button>
+                <button onClick={() => setConfirm(false)} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-1.5 text-[12px] font-medium cursor-pointer">Non</button>
+              </div>
+            : <button onClick={() => setConfirm(true)} className="flex items-center gap-1.5 rounded-[9px] border border-[#c0392b]/30 bg-[#fdecea] px-3 py-1.5 text-[12px] font-medium text-[#c0392b] cursor-pointer">
+                <Trash2 size={12}/> Supprimer
+              </button>
+          }
+          <div className="flex gap-2">
+            <button onClick={onClose} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-4 py-2 text-[13px] font-medium cursor-pointer">Annuler</button>
+            <button onClick={handleSave} className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#1a1a18] px-4 py-2 text-[13px] font-medium text-white cursor-pointer">
+              <Check size={13}/> Enregistrer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AvancesTab({ client, onAction, onOpenInvoice }: {
   client: Client
   onAction: (a: AvanceAction) => void
   onOpenInvoice: (m: AvanceMvt) => void
 }) {
+  const { updateClientAvance, deleteClientAvance } = useAppStore()
+  const [editAvance, setEditAvance] = useState<AvanceMvt | null>(null)
   const avances = client.avances ?? []
   const solde = soldeAvance(client)
   const credits = avances.filter(m => m.dir === 'credit').reduce((s, m) => s + m.montant, 0)
@@ -556,7 +719,7 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
     achat:     { color: '#996600', bg: '#fdf3dc' },
   }
 
-  return (
+  return (<>
     <div className="flex flex-col gap-4 p-4 sm:p-5">
       {/* Balance card */}
       <div className="overflow-hidden rounded-[14px]" style={{
@@ -613,15 +776,16 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
             const isClickable = m.type === 'facture' && m.lines && m.lines.length > 0
             return (
               <div key={m.id}
-                onClick={() => isClickable && onOpenInvoice(m)}
-                className={cn('flex items-start gap-3 rounded-[10px] border border-black/[0.06] bg-white px-3.5 py-2.5',
-                  isClickable && 'cursor-pointer hover:border-[#1a5fa8]/30 hover:bg-[#f5f8ff] transition-colors')}>
-                <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-[7px]" style={{ background: tc.bg }}>
+                className="flex items-start gap-3 rounded-[10px] border border-black/[0.06] bg-white px-3.5 py-2.5">
+                <div
+                  onClick={() => isClickable && onOpenInvoice(m)}
+                  className={cn('mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-[7px]', isClickable && 'cursor-pointer')}
+                  style={{ background: tc.bg }}>
                   {isClickable
                     ? <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke={tc.color} strokeWidth="2" strokeLinecap="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg>
                     : <span style={{ color: tc.color }} className="text-[9px] font-bold">{m.dir === 'credit' ? '+' : '−'}</span>}
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0" onClick={() => isClickable && onOpenInvoice(m)} style={{ cursor: isClickable ? 'pointer' : undefined }}>
                   <div className="flex items-center gap-1.5">
                     <span className="rounded-full px-2 py-0.5 text-[9px] font-medium" style={{ background: tc.bg, color: tc.color }}>{typeLabel[m.type]}</span>
                     <span className="text-[11px] text-[#a8a7a2]">{m.date} {m.time}</span>
@@ -632,8 +796,15 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
                     {m.modes.map((pm, i) => <ChannelBadge key={i} mode={pm.mode} amount={pm.amount} showAmt/>)}
                   </div>
                 </div>
-                <div className="flex-shrink-0 font-mono text-[13px] font-semibold" style={{ color: tc.color }}>
-                  {m.dir === 'credit' ? '+' : '−'}{f(m.montant)} MRU
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="font-mono text-[13px] font-semibold" style={{ color: tc.color }}>
+                    {m.dir === 'credit' ? '+' : '−'}{f(m.montant)} MRU
+                  </div>
+                  <button
+                    onClick={e => { e.stopPropagation(); setEditAvance(m) }}
+                    className="flex h-6 w-6 items-center justify-center rounded-[6px] border border-black/[0.08] bg-[#f0efe9] cursor-pointer hover:bg-[#e8e6e0]">
+                    <Pencil size={11} className="text-[#6b6a66]"/>
+                  </button>
                 </div>
               </div>
             )
@@ -641,7 +812,16 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
         </div>
       )}
     </div>
-  )
+
+    {editAvance && (
+      <EditAvanceModal
+        mvt={editAvance}
+        onClose={() => setEditAvance(null)}
+        onSave={updated => { updateClientAvance(client.id, updated); setEditAvance(null) }}
+        onDelete={() => { deleteClientAvance(client.id, editAvance.id); setEditAvance(null) }}
+      />
+    )}
+  </>)
 }
 
 // ─── Transactions tab ─────────────────────────────────────────────────────────
@@ -781,7 +961,7 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
   onPayment: (clientId: string, amounts: Record<string, number>, note: string) => void
   boutiqueFermee: boolean
 }) {
-  const { addClientAvance } = useAppStore()
+  const { addClientAvance, updateStockRef } = useAppStore()
   const [client, setClient]     = useState<Client>(initial)
   const [tab, setTab]           = useState<TabName>('transactions')
   const [invoiceTx, setInvoiceTx] = useState<Tx | null>(null)
@@ -1097,8 +1277,9 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
         action={avanceAction}
         solde={sa}
         onClose={() => setAvanceAction(null)}
-        onSave={(mvt, _stockLines) => {
+        onSave={(mvt, stockLines) => {
           addClientAvance(client.id, mvt)
+          for (const sl of stockLines) updateStockRef(sl.productId, sl.refId, sl.qty)
           setClient(prev => ({ ...prev, avances: [{ ...mvt, id: Date.now().toString() }, ...(prev.avances ?? [])] }))
           setAvanceAction(null)
         }}

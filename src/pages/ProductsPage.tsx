@@ -279,41 +279,6 @@ function FormModal({
 }
 
 // ── Delete Confirm Modal ───────────────────────────────────────────────────
-function DeleteModal({ name, onConfirm, onClose }: { name: string; onConfirm: () => void; onClose: () => void }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45"
-      onClick={onClose}
-    >
-      <div
-        className="flex flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-white"
-        style={{ width: 400 }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="px-5 py-5">
-          <div className="text-[15px] font-medium text-[#111110] mb-1">Supprimer le produit</div>
-          <div className="text-[13px] text-[#6b6a66]">
-            Voulez-vous vraiment supprimer <span className="font-medium text-[#111110]">«{name}»</span> ? Cette action est irréversible.
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 border-t border-black/[0.08] px-5 py-3 flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="rounded-[9px] border border-black/[0.1] bg-white px-4 py-2 text-[12px] font-medium text-[#6b6a66] hover:bg-[#f0efe9] cursor-pointer"
-          >
-            Annuler
-          </button>
-          <button
-            onClick={onConfirm}
-            className="rounded-[9px] bg-[#c0392b] px-4 py-2 text-[12px] font-medium text-white hover:opacity-80 cursor-pointer border-none"
-          >
-            Supprimer
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // ── Main Page ──────────────────────────────────────────────────────────────
 export function ProductsPage() {
@@ -326,8 +291,6 @@ export function ProductsPage() {
   // Modal state
   const [refsModal, setRefsModal] = useState<Product | null>(null)
   const [formModal, setFormModal] = useState<{ open: boolean; product: Product | null }>({ open: false, product: null })
-  const [deleteModal, setDeleteModal] = useState<Product | null>(null)
-
   // Filtered + sorted products
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -371,17 +334,6 @@ export function ProductsPage() {
       }))
       await addProduct({ name: f.name.trim(), category: f.category, refs: newRefs })
     }
-  }
-
-  const handleDelete = (p: Product) => {
-    setDeleteModal(p)
-  }
-
-  const confirmDelete = () => {
-    if (!deleteModal) return
-    const id = deleteModal.id
-    useAppStore.setState(s => ({ products: s.products.filter(p => p.id !== id) }))
-    setDeleteModal(null)
   }
 
   const toggleExpand = (id: string) => {
@@ -541,13 +493,6 @@ export function ProductsPage() {
                             >
                               <Edit2 size={11} className="text-[#6b6a66]" />
                             </button>
-                            <button
-                              onClick={() => handleDelete(p)}
-                              className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-[#fdecea] border-none cursor-pointer hover:opacity-80"
-                              title="Supprimer"
-                            >
-                              <Trash2 size={11} className="text-[#c0392b]" />
-                            </button>
                           </div>
                         </td>
                       </tr>
@@ -604,13 +549,6 @@ export function ProductsPage() {
         />
       )}
 
-      {deleteModal && (
-        <DeleteModal
-          name={deleteModal.name}
-          onConfirm={confirmDelete}
-          onClose={() => setDeleteModal(null)}
-        />
-      )}
     </div>
   )
 }

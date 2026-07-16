@@ -1333,7 +1333,7 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
   clientId: string | null
   products: Product[]
   onClose: () => void
-  onSave: (lines: TxLine[], total: number) => Promise<void>
+  onSave: (lines: TxLine[], total: number, payModes: PayMode[]) => Promise<void>
   onDelete: () => Promise<void>
 }) {
   const initSubtotal = tx.lines.reduce((s, l) => s + l.total, 0)
@@ -1343,9 +1343,26 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
   const [deleting,     setDeleting]     = useState(false)
   const [saving,       setSaving]       = useState(false)
 
-  const subtotal = editLines.reduce((s, l) => s + l.qty * l.pu, 0)
-  const discount = parseFloat(discountStr) || 0
-  const total    = Math.max(0, subtotal - discount)
+  // Payment modes — exclude Crédit/Avance (credit is auto-derived)
+  const [editModes, setEditModes] = useState<PayMode[]>(() => {
+    const cash = tx.payModes.filter(m => m.mode !== 'Crédit' && m.mode !== 'Avance')
+    return cash.length > 0 ? cash.map(m => ({ ...m })) : [{ mode: 'Cash', amount: tx.paid }]
+  })
+
+  const subtotal    = editLines.reduce((s, l) => s + l.qty * l.pu, 0)
+  const discount    = parseFloat(discountStr) || 0
+  const total       = Math.max(0, subtotal - discount)
+  const totalPaid   = editModes.reduce((s, m) => s + (parseFloat(String(m.amount)) || 0), 0)
+  const creditAuto  = Math.max(0, total - totalPaid)
+
+  const updateMode = (i: number, field: 'mode' | 'amount', val: string) =>
+    setEditModes(ms => ms.map((m, j) => j !== i ? m : { ...m, [field]: field === 'amount' ? (parseFloat(val) || 0) : val }))
+  const removeMode = (i: number) => setEditModes(ms => ms.filter((_, j) => j !== i))
+  const addMode    = () => {
+    const used = new Set(editModes.map(m => m.mode))
+    const next = CHANNELS.find(c => !used.has(c.name))?.name ?? CHANNELS[0].name
+    setEditModes(ms => [...ms, { mode: next, amount: 0 }])
+  }
 
   const updateLine = (i: number, field: 'qty' | 'pu', raw: string) => {
     const val = Math.max(0, parseFloat(raw) || 0)
@@ -1396,9 +1413,13 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
       alert(`Prix de vente (${belowCost.pu.toLocaleString('fr-FR')} MRU) inférieur au prix d'achat (${cost.toLocaleString('fr-FR')} MRU) pour "${belowCost.desc}". Vente impossible.`)
       return
     }
-    const finalLines = editLines.map(l => ({ ...l, total: l.qty * l.pu }))
+    const finalLines    = editLines.map(l => ({ ...l, total: l.qty * l.pu }))
+    const finalPayModes = [
+      ...editModes.filter(m => m.amount > 0),
+      ...(creditAuto > 0 ? [{ mode: 'Crédit', amount: creditAuto }] : []),
+    ]
     setSaving(true)
-    try { await onSave(finalLines, total) }
+    try { await onSave(finalLines, total, finalPayModes) }
     finally { setSaving(false) }
   }
 
@@ -1504,6 +1525,49 @@ function EditInvoiceModal({ tx, products, onClose, onSave, onDelete }: {
               <span className="font-mono">{total.toLocaleString('fr-FR')} MRU</span>
             </div>
           </div>
+
+          {/* Payment modes */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#a8a7a2]">Paiement</div>
+              {editModes.length < CHANNELS.length && (
+                <button onClick={addMode}
+                  className="flex items-center gap-1 rounded-full border border-black/[0.08] bg-[#f0efe9] px-2.5 py-1 text-[11px] font-medium text-[#6b6a66] cursor-pointer hover:bg-[#e8e7e3] border-none">
+                  + Mode
+                </button>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              {editModes.map((m, i) => {
+                const ch = chanInfo(m.mode)
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <select value={m.mode} onChange={e => updateMode(i, 'mode', e.target.value)}
+                      className="rounded-[8px] border border-black/[0.08] px-2 py-1.5 text-[12px] font-medium outline-none cursor-pointer"
+                      style={{ background: ch.bg, color: ch.color }}>
+                      {CHANNELS.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+                    <input type="number" min="0" step="1" value={m.amount}
+                      onChange={e => updateMode(i, 'amount', e.target.value)}
+                      className="flex-1 rounded-[8px] border border-black/[0.08] bg-[#f8f7f3] px-2.5 py-1.5 font-mono text-right text-[12px] outline-none focus:border-[#1a1a18] focus:bg-white" />
+                    <span className="text-[11px] text-[#a8a7a2] flex-shrink-0">MRU</span>
+                    {editModes.length > 1 && (
+                      <button onClick={() => removeMode(i)}
+                        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border-none bg-transparent cursor-pointer text-[#a8a7a2] hover:bg-[#fdecea] hover:text-[#c0392b]">
+                        <X size={11}/>
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              {/* Credit balance */}
+              <div className={cn('flex items-center justify-between rounded-[8px] px-3 py-2 text-[12px] font-medium',
+                creditAuto > 0 ? 'bg-[#fdf3dc] text-[#996600]' : 'bg-[#e8f5ee] text-[#1a7a4a]')}>
+                <span>{creditAuto > 0 ? 'Crédit restant' : 'Entièrement payé'}</span>
+                <span className="font-mono">{creditAuto > 0 ? fmt(creditAuto) + ' MRU' : '✓'}</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
@@ -1557,15 +1621,17 @@ function SortieModal({ tx, mvt, boutiqueFermee, onClose, onViewPdf, onToggleLine
   const allDone = lines.length > 0 && pickedCount === lines.length
   const reste   = (tx.total ?? 0) - (tx.paid ?? 0)
 
-  const [payMode, setPayMode] = useState(CHANNELS[0].name)
-  const [payAmt, setPayAmt]   = useState(reste > 0 ? String(reste) : '')
-  const [paying, setPaying]   = useState(false)
+  const [payMode,    setPayMode]    = useState(CHANNELS[0].name)
+  const [payAmt,     setPayAmt]     = useState(reste > 0 ? String(reste) : '')
+  const [paying,     setPaying]     = useState(false)
   const [validating, setValidating] = useState(false)
+  const [confirming, setConfirming] = useState(false)
 
   const handleEncaisser = async () => {
     const amt = parseFloat(payAmt.replace(/\s/g, '').replace(',', '.')) || 0
     if (amt <= 0 || boutiqueFermee) return
     setPaying(true)
+    setConfirming(false)
     try { await onEncaisser(tx.id, [{ mode: payMode, amount: amt }]) }
     finally { setPaying(false) }
   }
@@ -1648,24 +1714,59 @@ function SortieModal({ tx, mvt, boutiqueFermee, onClose, onViewPdf, onToggleLine
         {/* Encaissement section — only if there's a remaining balance */}
         {reste > 0 && (
           <div className="flex-shrink-0 border-t border-black/[0.08] px-5 py-4 bg-[#fdf9f0]">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[12px] font-semibold text-[#111110]">Encaissement</span>
-              <span className="font-mono text-[13px] font-semibold text-[#c0392b]">Reste : {fmt(reste)} MRU</span>
-            </div>
-            <div className="flex gap-2">
-              <select value={payMode} onChange={e => setPayMode(e.target.value)}
-                className="h-9 rounded-[8px] border border-black/[0.1] bg-white px-2 text-[12px] font-medium text-[#111110] outline-none cursor-pointer">
-                {CHANNELS.map(c => <option key={c.id}>{c.name}</option>)}
-              </select>
-              <input type="text" inputMode="numeric" value={payAmt} onChange={e => setPayAmt(e.target.value)}
-                placeholder={fmt(reste)}
-                className="flex-1 h-9 rounded-[8px] border border-black/[0.1] bg-white px-3 font-mono text-[13px] font-medium outline-none focus:border-[#1a1a18]"/>
-              <button onClick={handleEncaisser} disabled={paying || boutiqueFermee}
-                className={cn('h-9 rounded-[8px] px-4 text-[12px] font-semibold text-white border-none',
-                  paying || boutiqueFermee ? 'bg-[#a8a7a2] cursor-not-allowed' : 'bg-[#1a7a4a] cursor-pointer hover:opacity-90')}>
-                {paying ? '…' : 'Encaisser'}
-              </button>
-            </div>
+            {confirming ? (
+              /* Confirmation view */
+              <div className="flex flex-col gap-3">
+                <div className="rounded-[10px] bg-[#fff8ec] border border-[#f0c040]/40 px-4 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-[#996600] mb-1">Confirmer l'encaissement</div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="font-mono text-[22px] font-bold text-[#111110]">
+                      {fmt(parseFloat(payAmt.replace(/\s/g,'').replace(',','.')) || 0)}
+                    </span>
+                    <span className="text-[12px] text-[#6b6a66]">MRU</span>
+                    <span className="text-[12px] text-[#6b6a66]">via</span>
+                    <span className="font-semibold text-[13px] text-[#111110]">{payMode}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirming(false)} disabled={paying}
+                    className="flex-1 h-9 rounded-[9px] border border-black/[0.1] bg-white text-[13px] font-medium text-[#6b6a66] cursor-pointer hover:bg-[#f0efe9] disabled:opacity-50">
+                    Annuler
+                  </button>
+                  <button onClick={handleEncaisser} disabled={paying}
+                    className="flex-1 h-9 rounded-[9px] border-none bg-[#1a7a4a] text-[13px] font-semibold text-white cursor-pointer hover:opacity-90 disabled:opacity-50">
+                    {paying ? '…' : 'Confirmer'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Input view */
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[12px] font-semibold text-[#111110]">Encaissement</span>
+                  <span className="font-mono text-[13px] font-semibold text-[#c0392b]">Reste : {fmt(reste)} MRU</span>
+                </div>
+                <div className="flex gap-2">
+                  <select value={payMode} onChange={e => setPayMode(e.target.value)}
+                    className="h-9 rounded-[8px] border border-black/[0.1] bg-white px-2 text-[12px] font-medium text-[#111110] outline-none cursor-pointer">
+                    {CHANNELS.map(c => <option key={c.id}>{c.name}</option>)}
+                  </select>
+                  <input type="text" inputMode="numeric" value={payAmt} onChange={e => setPayAmt(e.target.value)}
+                    placeholder={fmt(reste)}
+                    className="flex-1 h-9 rounded-[8px] border border-black/[0.1] bg-white px-3 font-mono text-[13px] font-medium outline-none focus:border-[#1a1a18]"/>
+                  <button
+                    onClick={() => {
+                      const amt = parseFloat(payAmt.replace(/\s/g,'').replace(',','.')) || 0
+                      if (amt > 0 && !boutiqueFermee) setConfirming(true)
+                    }}
+                    disabled={boutiqueFermee}
+                    className={cn('h-9 rounded-[8px] px-4 text-[12px] font-semibold text-white border-none',
+                      boutiqueFermee ? 'bg-[#a8a7a2] cursor-not-allowed' : 'bg-[#1a7a4a] cursor-pointer hover:opacity-90')}>
+                    Encaisser
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1897,68 +1998,80 @@ export function CashPage() {
   const encaissTotal = useMemo(() => encaissDay.reduce((s,m)=>s+m.montant,0), [encaissDay])
   const clotureDuJour   = useMemo(() => todayMvts.find(m => m.type === 'cloture'),   [todayMvts])
   const ouvertureDuJour = useMemo(() => todayMvts.find(m => m.type === 'ouverture'), [todayMvts])
-  // Caisse is open if the most recent ouverture/cloture movement today is an ouverture
-  const caisseOuverte = useMemo(() => {
-    const relevant = todayMvts
-      .filter(m => m.type === 'ouverture' || m.type === 'cloture')
-      .sort((a, b) => a.time.localeCompare(b.time))
-    return relevant.length > 0 && relevant[relevant.length - 1].type === 'ouverture'
-  }, [todayMvts])
 
-  // Current session boundaries (last ouverture → first cloture after it, or open-ended)
-  const sessionBounds = useMemo(() => {
-    const relevant = todayMvts
+  // Sortable datetime string: "14/07/2026" + "10:30" → "2026-07-14 10:30"
+  const mvtDt = (m: Mouvement) => {
+    const [d, mo, y] = (m.date || '01/01/2000').split('/')
+    return `${y}-${mo}-${d} ${m.time || '00:00'}`
+  }
+
+  // Caisse is open if the last ouverture/cloture across ALL days is an ouverture
+  const caisseOuverte = useMemo(() => {
+    const relevant = mouvements
       .filter(m => m.type === 'ouverture' || m.type === 'cloture')
-      .sort((a, b) => a.time.localeCompare(b.time))
-    // Find the last ouverture
+      .sort((a, b) => mvtDt(a).localeCompare(mvtDt(b)))
+    return relevant.length > 0 && relevant[relevant.length - 1].type === 'ouverture'
+  }, [mouvements])
+
+  // Session boundaries across all days: last ouverture → first cloture after it
+  const sessionBounds = useMemo(() => {
+    const relevant = mouvements
+      .filter(m => m.type === 'ouverture' || m.type === 'cloture')
+      .sort((a, b) => mvtDt(a).localeCompare(mvtDt(b)))
     let lastOuvIdx = -1
     for (let i = relevant.length - 1; i >= 0; i--) {
       if (relevant[i].type === 'ouverture') { lastOuvIdx = i; break }
     }
     if (lastOuvIdx === -1) return null
-    const start = relevant[lastOuvIdx].time
-    // First cloture after the last ouverture
-    const endMvt = relevant.slice(lastOuvIdx + 1).find(m => m.type === 'cloture')
-    return { start, end: endMvt?.time ?? null }
-  }, [todayMvts])
+    const startDt = mvtDt(relevant[lastOuvIdx])
+    const endMvt  = relevant.slice(lastOuvIdx + 1).find(m => m.type === 'cloture')
+    return { startDt, endDt: endMvt ? mvtDt(endMvt) : null }
+  }, [mouvements])
 
-  // IDs of vente cashMvts within the current session window
+  // IDs of vente cashMvts within the current session window (any date)
   const sessionVenteMvtIds = useMemo(() => {
     if (!sessionBounds) return new Set<string>()
-    const { start, end } = sessionBounds
+    const { startDt, endDt } = sessionBounds
     return new Set(
-      todayMvts
-        .filter(m => m.type === 'vente' && m.time >= start && (end === null || m.time <= end))
+      mouvements
+        .filter(m => {
+          if (m.type !== 'vente') return false
+          const dt = mvtDt(m)
+          return dt >= startDt && (endDt === null || dt <= endDt)
+        })
         .map(m => {
           const match = m.desc.match(/Vente\s+(F-\S+)/)
           return match ? match[1] : null
         })
         .filter(Boolean) as string[]
     )
-  }, [todayMvts, sessionBounds])
+  }, [mouvements, sessionBounds])
 
   const beneficeSession = useMemo(() => {
     const refCostMap = new Map<string, number>()
     for (const p of products) for (const r of p.refs) refCostMap.set(r.id, r.prixAchat ?? 0)
     const allTxs = [...ventesComptoir, ...clients.flatMap(c => c.transactions)]
-    // Only count txs whose vente cashMvt falls within the current session
-    const sessionTxs = allTxs.filter(tx => tx.date === td && sessionVenteMvtIds.has(tx.id))
+    const sessionTxs = allTxs.filter(tx => sessionVenteMvtIds.has(tx.id))
     return sessionTxs.reduce((total, tx) =>
       total + tx.lines.reduce((s, l) => {
         const cost = l.refId ? (refCostMap.get(l.refId) ?? 0) : 0
         return s + (l.pu - cost) * l.qty
       }, 0)
     , 0)
-  }, [ventesComptoir, clients, products, td, sessionVenteMvtIds])
+  }, [ventesComptoir, clients, products, sessionVenteMvtIds])
 
-  // Depenses within session window
+  // Depenses within session window (any date)
   const depensesJour = useMemo(() => {
     if (!sessionBounds) return 0
-    const { start, end } = sessionBounds
-    return todayMvts
-      .filter(m => m.type === 'depense' && m.time >= start && (end === null || m.time <= end))
+    const { startDt, endDt } = sessionBounds
+    return mouvements
+      .filter(m => {
+        if (m.type !== 'depense') return false
+        const dt = mvtDt(m)
+        return dt >= startDt && (endDt === null || dt <= endDt)
+      })
       .reduce((s, m) => s + m.montant, 0)
-  }, [todayMvts, sessionBounds])
+  }, [mouvements, sessionBounds])
 
   const beneficeNet = beneficeSession - depensesJour
 
@@ -3048,8 +3161,8 @@ export function CashPage() {
           clientId={editInvoice.clientId}
           products={products}
           onClose={() => setEditInvoice(null)}
-          onSave={async (lines, total) => {
-            await updateTx(editInvoice.tx.id, editInvoice.clientId, lines, total)
+          onSave={async (lines, total, payModes) => {
+            await updateTx(editInvoice.tx.id, editInvoice.clientId, lines, total, payModes)
             setEditInvoice(null)
           }}
           onDelete={async () => {

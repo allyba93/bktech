@@ -142,7 +142,9 @@ interface AppState {
   annulerVente:     (txId: string, clientId: string | null) => Promise<Tx | null>
   deleteVente:      (txId: string, clientId: string | null) => Promise<void>
   payClient:        (clientId: string, amounts: Record<string, number>, note: string) => Promise<void>
-  addClientAvance:  (clientId: string, mvt: Omit<AvanceMvt, 'id'>) => Promise<void>
+  addClientAvance:    (clientId: string, mvt: Omit<AvanceMvt, 'id'>) => Promise<void>
+  updateClientAvance: (clientId: string, mvt: AvanceMvt) => Promise<void>
+  deleteClientAvance: (clientId: string, mvtId: string) => Promise<void>
 
   // Actions — Cash
   setCashMvts:         (m: CashMvt[]) => void
@@ -157,7 +159,7 @@ interface AppState {
   toggleTxLineSortie:  (txId: string, lineIdx: number) => Promise<void>
   validateTxSortie:    (txId: string) => Promise<void>
   payTxDirect:         (txId: string, modes: PayMode[]) => Promise<void>
-  updateTx:            (txId: string, clientId: string | null, lines: TxLine[], total: number) => Promise<void>
+  updateTx:            (txId: string, clientId: string | null, lines: TxLine[], total: number, payModes?: PayMode[]) => Promise<void>
 
   // Actions — Caisse épargne
   addEpargneMvt:    (m: Omit<EpargneMvt, 'id'>) => Promise<void>
@@ -719,6 +721,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  updateClientAvance: async (clientId, mvt) => {
+    const client = get().clients.find(c => c.id === clientId)
+    if (!client) return
+    const updated = { ...client, avances: (client.avances ?? []).map(a => a.id === mvt.id ? mvt : a) }
+    set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
+    await saveClient(updated)
+  },
+
+  deleteClientAvance: async (clientId, mvtId) => {
+    const client = get().clients.find(c => c.id === clientId)
+    if (!client) return
+    const updated = { ...client, avances: (client.avances ?? []).filter(a => a.id !== mvtId) }
+    set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
+    await saveClient(updated)
+  },
+
   // ── Cash ───────────────────────────────────────────────────────────────────
   addCashMvt: async (m) => {
     const ref = doc(collection(db, COL.cashMvts))
@@ -1031,8 +1049,43 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  updateTx: async (txId, clientId, lines, total) => {
-    const updates = { lines, total }
+  updateTx: async (txId, clientId, lines, total, payModes) => {
+    // Find existing tx to get current paid amount
+    let existingTx: Tx | undefined
+    if (clientId) {
+      existingTx = get().clients.find(c => c.id === clientId)?.transactions.find(t => t.id === txId)
+    } else {
+      existingTx = get().ventesComptoir.find(t => t.id === txId)
+    }
+
+    let newPayModes: PayMode[]
+    let newPaid: number
+    let newCashModes: PayMode[]
+
+    if (payModes) {
+      // Use explicit payModes provided by the user
+      newCashModes = payModes.filter(m => m.mode !== 'Crédit' && m.mode !== 'Avance')
+      newPaid = Math.min(newCashModes.reduce((s, m) => s + m.amount, 0), total)
+      newPayModes = payModes
+    } else {
+      // Auto-recalculate: cap cash modes at new total, recompute credit
+      const existingModes = existingTx?.payModes ?? []
+      const cashModes = existingModes.filter(m => m.mode !== 'Crédit' && m.mode !== 'Avance')
+      const cashTotal = cashModes.reduce((s, m) => s + m.amount, 0)
+      const cappedCash = Math.min(cashTotal, total)
+      newCashModes = cashTotal > 0 && cappedCash < cashTotal
+        ? cashModes.map(m => ({ ...m, amount: Math.round(m.amount / cashTotal * cappedCash) })).filter(m => m.amount > 0)
+        : cashModes
+      const newCredit = Math.max(0, total - cappedCash)
+      newPaid = Math.min(existingTx?.paid ?? total, total)
+      newPayModes = [
+        ...newCashModes,
+        ...(newCredit > 0 ? [{ mode: 'Crédit', amount: newCredit }] : []),
+      ]
+    }
+
+    const updates = { lines, total, paid: newPaid, payModes: newPayModes }
+
     if (clientId) {
       const client = get().clients.find(c => c.id === clientId)
       if (!client) return
@@ -1046,6 +1099,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       set(s => ({ ventesComptoir: s.ventesComptoir.map(t => t.id === txId ? { ...t, ...updates } : t) }))
       const snap = await getDocs(query(collection(db, COL.ventesComptoir), where('id', '==', txId)))
       if (!snap.empty) await updateDoc(snap.docs[0].ref, updates)
+    }
+
+    // Sync the vente cashMvt so solde/ventesTotal reflect the change
+    if (newPaid > 0) {
+      const venteMvt = get().cashMvts.find(m => m.type === 'vente' && m.desc?.includes(txId))
+      const cashModesForMvt = newCashModes.filter(m => m.amount > 0)
+      if (venteMvt) {
+        if (venteMvt.montant !== newPaid) {
+          await get().updateCashMvt({ ...venteMvt, montant: newPaid, modes: cashModesForMvt })
+        }
+      } else {
+        // No cashMvt existed (was a pure credit invoice) — create one now
+        const tx = existingTx
+        const clientName = clientId
+          ? (get().clients.find(c => c.id === clientId)?.prenom ?? '')
+          : ''
+        const mvtDesc = `Vente ${txId}${clientName ? ' — ' + clientName : ''}`
+        const txDate = tx?.date ?? todayStr()
+        const txTime = tx?.time ?? nowTime()
+        await get().addCashMvt({
+          date: txDate, time: txTime,
+          type: 'vente', dir: 'entree',
+          desc: mvtDesc, cat: 'Vente POS',
+          montant: newPaid, modes: cashModesForMvt,
+        })
+      }
+    } else {
+      // newPaid is 0 — if a cashMvt existed, remove it (fully credit again)
+      const venteMvt = get().cashMvts.find(m => m.type === 'vente' && m.desc?.includes(txId))
+      if (venteMvt && venteMvt.montant !== 0) {
+        await get().updateCashMvt({ ...venteMvt, montant: 0, modes: [] })
+      }
     }
   },
 
