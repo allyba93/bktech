@@ -7,8 +7,8 @@ mkdir -p "$LOG_DIR"
 
 echo "[run-backup] $(date -u '+%Y-%m-%d %H:%M') UTC"
 
-# 1. Export Firestore
-node "$REPO/scripts/backup-db.mjs"
+# 1. Export Firestore (run from scripts/ so Node resolves its own node_modules)
+cd "$REPO/scripts" && node backup-db.mjs
 
 # 2. Keep only the 3 most recent backup files
 cd "$REPO/backups"
