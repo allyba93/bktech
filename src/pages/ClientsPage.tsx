@@ -11,7 +11,9 @@ import type { InvoiceData } from '@/components/InvoiceModal'
 type PayMode   = { mode: string; amount: number }
 type TxLine    = { desc: string; qty: number; pu: number; total: number; productName?: string; refId?: string }
 type Tx        = { id: string; date: string; total: number; paid: number; lines: TxLine[]; payModes: PayMode[] }
-type Payment   = { date: string; desc: string; mode?: string; amount: number; modes: PayMode[] }
+// `avanceId` : renseigné quand le paiement est une imputation d'avoir (voir
+// ClientPaymentRec dans le store, dont ce type est un doublon structurel).
+type Payment   = { date: string; desc: string; mode?: string; amount: number; modes: PayMode[]; avanceId?: string }
 type Client    = { id: string; prenom: string; nom: string; tel: string; ville: string; email: string; type: string; credit: number; notes: string; transactions: Tx[]; payments: Payment[]; avances?: AvanceMvt[] }
 type TabName   = 'transactions' | 'paiements' | 'avances' | 'infos'
 type FilterKey = 'all' | 'impaye' | 'retard' | 'solde' | 'vieux'
@@ -32,7 +34,16 @@ const f        = (n: number) => n.toLocaleString('fr-FR')
 const avColor  = (id: string) => { const n = id.split('').reduce((s, c) => s + c.charCodeAt(0), 0); return AV_COLORS[n % AV_COLORS.length] }
 const initials = (name: string) => name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
 const todayStr = () => { const d = new Date(); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}` }
-const chanById  = (name: string) => CHANNELS.find(c => c.name === name) ?? { label: name.slice(0,3).toUpperCase(), color: '#6b6a66', bg: '#f0efe9', name }
+// Modes non monétaires : aucun argent n'entre en caisse, on les distingue donc
+// visuellement des vrais canaux de paiement (sans quoi ils tombaient dans le
+// badge gris générique « AVA »).
+const NON_CASH_MODES: Record<string, { label: string; color: string; bg: string }> = {
+  'Avance': { label: 'AVOIR',  color: '#7c3aed', bg: '#f0e8ff' },
+  'Crédit': { label: 'CRÉDIT', color: '#c0392b', bg: '#fdecea' },
+}
+const chanById  = (name: string) =>
+  CHANNELS.find(c => c.name === name)
+  ?? (NON_CASH_MODES[name] ? { ...NON_CASH_MODES[name], name } : { label: name.slice(0,3).toUpperCase(), color: '#6b6a66', bg: '#f0efe9', name })
 
 const totalAchats  = (c: Client) => c.transactions.reduce((s, t) => s + t.total, 0)
 const totalPaye    = (c: Client) => c.transactions.reduce((s, t) => s + t.paid, 0)
@@ -1342,9 +1353,15 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
             <div className="p-5">
               {client.payments.length === 0
                 ? <div className="py-8 text-center text-[13px] text-[#a8a7a2]">Aucun paiement enregistré</div>
-                : client.payments.map((p, i) => (
+                : client.payments.map((p, i) => {
+                    // Une imputation d'avoir n'est pas un encaissement : aucun
+                    // argent n'est entré. On la teinte en violet pour qu'elle ne
+                    // se confonde pas avec les règlements en espèces.
+                    const parAvoir = !!p.avanceId
+                    const teinte = parAvoir ? '#7c3aed' : '#1a7a4a'
+                    return (
                     <div key={i} className="flex items-center gap-3 border-b border-black/[0.05] py-2.5">
-                      <div className="h-2 w-2 flex-shrink-0 rounded-full bg-[#1a7a4a]" />
+                      <div className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: teinte }} />
                       <span className="min-w-[85px] text-[11px] text-[#a8a7a2]">{p.date}</span>
                       <span className="flex-1 text-[12px] text-[#111110]">{p.desc}</span>
                       <div className="flex flex-wrap justify-end gap-1.5">
@@ -1352,11 +1369,12 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
                           <ChannelBadge key={j} mode={m.mode} amount={m.amount} showAmt />
                         ))}
                       </div>
-                      <span className="min-w-[95px] text-right font-mono text-[13px] font-medium text-[#1a7a4a]">
+                      <span className="min-w-[95px] text-right font-mono text-[13px] font-medium" style={{ color: teinte }}>
                         +{f(p.amount)} MRU
                       </span>
                     </div>
-                  ))
+                    )
+                  })
               }
             </div>
           )}

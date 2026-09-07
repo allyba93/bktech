@@ -48,7 +48,13 @@ export interface Tx {
   lines: TxLine[]; payModes: PayMode[]
   sortedLines?: boolean[]
 }
-export interface ClientPaymentRec { date: string; desc: string; amount: number; modes: PayMode[] }
+export interface ClientPaymentRec {
+  date: string; desc: string; amount: number; modes: PayMode[]
+  // Renseigné pour une imputation d'avoir : lie l'écriture au mouvement d'avoir,
+  // afin que sa suppression retire aussi cette ligne (ces enregistrements n'ont
+  // pas d'identifiant propre, un appariement par date/libellé serait fragile).
+  avanceId?: string
+}
 export interface AvanceMvt {
   id: string; date: string; time: string
   // 'imputation' : l'avoir éteint une dette existante au lieu d'être versé en
@@ -803,13 +809,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       modes: [{ mode: 'Avance', amount: total }],
       imputations: applied,
     }
-    // Pas d'entrée dans `payments` : le mouvement figure déjà dans l'historique
-    // des avoirs et le mode 'Avance' apparaît sur chaque facture. Ces
-    // enregistrements n'ayant pas d'identifiant, en ajouter un rendrait
-    // l'annulation approximative. Même choix que le règlement par avance au POS.
+    // L'imputation figure aussi dans l'historique des paiements, avec les
+    // factures concernées dans le libellé : c'est là qu'on cherche « comment
+    // cette facture a-t-elle été réglée ». `avanceId` permet de retirer
+    // exactement cette ligne si l'imputation est annulée.
+    const refs = applied.map(a => a.txId).join(', ')
+    const newPay: ClientPaymentRec = {
+      date: todayStr(),
+      desc: `${label} — ${refs}`,
+      amount: total,
+      modes: [{ mode: 'Avance', amount: total }],
+      avanceId: mvt.id,
+    }
+
     const updated: Client = {
       ...client,
       transactions: updTxs,
+      payments: [newPay, ...client.payments],
       avances: [...(client.avances ?? []), mvt],
     }
     set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
@@ -858,7 +874,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
     }
 
-    const updated = { ...client, transactions, avances: (client.avances ?? []).filter(a => a.id !== mvtId) }
+    const updated = {
+      ...client,
+      transactions,
+      avances: (client.avances ?? []).filter(a => a.id !== mvtId),
+      // Retire l'écriture de paiement liée à cette imputation, sinon elle
+      // resterait dans l'historique alors que la dette est de nouveau ouverte.
+      payments: client.payments.filter(p => p.avanceId !== mvtId),
+    }
     set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
     await saveClient(updated)
     // Delete cashMvt for versement (don't go through deleteCashMvt which has unrelated reversal logic)
