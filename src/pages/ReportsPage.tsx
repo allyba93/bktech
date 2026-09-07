@@ -1,8 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { X, ShoppingCart, Copy, Check } from 'lucide-react'
+import { X, ShoppingCart, Copy, Check, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/appStore'
-import type { Client, CashMvt, Product, Tx } from '@/store/appStore'
+import type { Client, CashMvt, EpargneMvt, Product, Tx } from '@/store/appStore'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Period = 'week' | 'month' | '3month' | 'year' | 'custom'
@@ -58,6 +58,55 @@ function getPeriodLabel(period: Period, customFrom: string, customTo: string): s
   return 'Période'
 }
 
+// ─── Local jour/semaine/mois filter (Dépenses & Investissements) ──────────────
+type FlowGrain = 'jour' | 'semaine' | 'mois'
+
+const isoOf = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
+// Range covering the grain that `anchor` (ISO yyyy-mm-dd) falls inside.
+function grainRange(grain: FlowGrain, anchor: string): { from: string; to: string } {
+  const d = new Date(anchor + 'T00:00:00')
+  if (isNaN(d.getTime())) return { from: anchor, to: anchor }
+  if (grain === 'jour') return { from: anchor, to: anchor }
+  if (grain === 'semaine') {
+    const offset = d.getDay() === 0 ? 6 : d.getDay() - 1  // Monday-based
+    const monday = new Date(d); monday.setDate(d.getDate() - offset)
+    const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+    return { from: isoOf(monday), to: isoOf(sunday) }
+  }
+  return {
+    from: isoOf(new Date(d.getFullYear(), d.getMonth(), 1)),
+    to:   isoOf(new Date(d.getFullYear(), d.getMonth() + 1, 0)),
+  }
+}
+
+// The equivalent range one grain earlier — for the vs-précédent delta.
+function prevGrainRange(grain: FlowGrain, anchor: string): { from: string; to: string } {
+  const d = new Date(anchor + 'T00:00:00')
+  if (isNaN(d.getTime())) return { from: anchor, to: anchor }
+  if (grain === 'mois') {
+    // Anchor on the 1st: setMonth() would overflow for day-31 anchors
+    // (31 Mar → 31 Feb → rolls forward to 3 Mar, landing back in the same month).
+    return grainRange('mois', isoOf(new Date(d.getFullYear(), d.getMonth() - 1, 1)))
+  }
+  const shifted = new Date(d)
+  shifted.setDate(d.getDate() - (grain === 'jour' ? 1 : 7))
+  return grainRange(grain, isoOf(shifted))
+}
+
+function grainLabel(grain: FlowGrain, anchor: string): string {
+  const { from, to } = grainRange(grain, anchor)
+  const f = new Date(from + 'T00:00:00')
+  if (grain === 'jour')
+    return f.toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long', year:'numeric' })
+  if (grain === 'semaine') {
+    const t = new Date(to + 'T00:00:00')
+    return `${f.toLocaleDateString('fr-FR',{day:'numeric',month:'short'})} — ${t.toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'})}`
+  }
+  return f.toLocaleDateString('fr-FR', { month:'long', year:'numeric' })
+}
+
 // Last N months as { isoFrom, isoTo, label }
 function getLastNMonths(n: number) {
   const now = new Date()
@@ -95,6 +144,93 @@ function filteredCash(cashMvts: CashMvt[], from: string, to: string) {
   return cashMvts.filter(m => { const d = dmyToISO(m.date); return d >= from && d <= to })
 }
 
+// One movement row as the flow section consumes it — both CashMvt and
+// EpargneMvt satisfy this shape, so the two ledgers can be merged.
+// `type` exists on CashMvt only — épargne rows are classified by category alone.
+type FlowRow = { id: string; date: string; desc: string; cat: string; montant: number; type?: string }
+
+// Generic date-range filter (store dates are DD/MM/YYYY).
+function inDateRange<T extends { date: string }>(items: T[], from: string, to: string): T[] {
+  return items.filter(m => { const d = dmyToISO(m.date); return d >= from && d <= to })
+}
+
+// Règle métier : tout ce qui sert à acquérir la marchandise (achat des bagages
+// + leur transport) est un INVESTISSEMENT ; toute autre sortie est une DÉPENSE.
+//
+// Achats fournisseurs et transport vivent dans le registre épargne — payFourn()
+// et livrerEncours() passent par addEpargneMvt, pas addCashMvt — d'où la lecture
+// des deux registres. Single source of truth: every "dépenses / investissements"
+// figure on the page goes through here, so no two cards can disagree.
+// Classement PAR CATÉGORIE, pas par type de mouvement : le modal « Dépense »
+// a longtemps proposé 'Transport' et 'Paiement fournisseur' dans ses catégories,
+// donc l'historique contient des achats/transports saisis en type 'depense'.
+// Router sur la catégorie reclasse correctement ces anciennes écritures.
+const INVEST_CATS = ['Paiement fournisseur', 'Transport', 'Achat bagages']
+const CAT_RENAME: Record<string, string> = { 'Paiement fournisseur': 'Achat bagages' }
+
+const isInvestRow = (m: { type?: string; cat: string }) =>
+  INVEST_CATS.includes(m.cat) || m.type === 'investissement'
+
+const normaliseCat = (m: FlowRow): FlowRow => ({ ...m, cat: CAT_RENAME[m.cat] ?? m.cat ?? 'Autre' })
+
+function classifyOutflows(cashMvts: CashMvt[], epargneMvts: EpargneMvt[], from: string, to: string) {
+  const byDateDesc = (a: FlowRow, b: FlowRow) => dmyToISO(b.date).localeCompare(dmyToISO(a.date))
+  const epargneOut = inDateRange(epargneMvts, from, to).filter(m => m.dir === 'sortie')
+  const cashOut    = inDateRange(cashMvts, from, to)
+    .filter(m => m.type === 'depense' || m.type === 'investissement')
+  const all: FlowRow[] = [...epargneOut, ...cashOut].map(normaliseCat)
+  return {
+    invest:  all.filter(m => isInvestRow(m)).sort(byDateDesc),
+    depense: all.filter(m => !isInvestRow(m)).sort(byDateDesc),
+  }
+}
+
+const sumMontant = (rows: FlowRow[]) => rows.reduce((s, m) => s + m.montant, 0)
+
+// ─── Detail table: search + column sort ───────────────────────────────────────
+type FlowSortKey = 'date' | 'kind' | 'desc' | 'cat' | 'montant'
+type FlowKind    = 'inv' | 'dep'
+interface FlowTableRow { m: FlowRow; kind: FlowKind }
+
+const KIND_META = {
+  inv: { label: 'Investissement', bg: 'bg-[#fdf3dc]', fg: 'text-[#996600]' },
+  dep: { label: 'Dépense',        bg: 'bg-[#fdecea]', fg: 'text-[#c0392b]' },
+} as const
+
+// Accent- and case-insensitive, so "electricite" matches "Électricité".
+const norm = (s: string) =>
+  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+// Text a column search matches against — what the user actually sees in
+// that cell, so typing "Dépense" or "05/03" behaves as expected.
+function rowFieldText(r: FlowTableRow, key: FlowSortKey): string {
+  switch (key) {
+    case 'date':    return r.m.date
+    case 'kind':    return KIND_META[r.kind].label
+    case 'desc':    return r.m.desc || ''
+    case 'cat':     return r.m.cat  || ''
+    case 'montant': return String(r.m.montant)
+  }
+}
+
+function sortFlowRows(rows: FlowTableRow[], key: FlowSortKey, dir: SortDir): FlowTableRow[] {
+  const sign = dir === 'asc' ? 1 : -1
+  const cmp = (a: FlowTableRow, b: FlowTableRow): number => {
+    switch (key) {
+      case 'date':    return dmyToISO(a.m.date).localeCompare(dmyToISO(b.m.date))
+      case 'montant': return a.m.montant - b.m.montant
+      case 'kind':    return KIND_META[a.kind].label.localeCompare(KIND_META[b.kind].label, 'fr')
+      case 'desc':    return (a.m.desc || '').localeCompare(b.m.desc || '', 'fr')
+      case 'cat':     return (a.m.cat  || '').localeCompare(b.m.cat  || '', 'fr')
+    }
+  }
+  // Stable tie-break on date so equal keys keep a predictable order.
+  return [...rows].sort((a, b) => {
+    const primary = cmp(a, b) * sign
+    return primary !== 0 ? primary : dmyToISO(b.m.date).localeCompare(dmyToISO(a.m.date))
+  })
+}
+
 function filteredClientTx(clients: Client[], from: string, to: string) {
   return clients.flatMap(c =>
     c.transactions
@@ -109,7 +245,8 @@ function aggregateModes(mvts: CashMvt[]) {
   return Object.entries(map).map(([mode, amount]) => ({ mode, amount })).sort((a,b) => b.amount - a.amount)
 }
 
-function aggregateCats(mvts: CashMvt[]) {
+// Structural param so it serves both cash and épargne ledgers.
+function aggregateCats(mvts: { cat: string; montant: number }[]) {
   const map: Record<string, number> = {}
   mvts.forEach(m => { map[m.cat || 'Autre'] = (map[m.cat || 'Autre'] ?? 0) + m.montant })
   return Object.entries(map).map(([cat, montant]) => ({ cat, montant })).sort((a,b) => b.montant - a.montant)
@@ -141,20 +278,20 @@ function Delta({ curr, prev }: { curr: number; prev: number }) {
   )
 }
 
-const KPI_STYLES = [
-  { cls: 'kpi-amber', color: '#996600' },
-  { cls: 'kpi-red',   color: '#c0392b' },
-  { cls: 'kpi-blue',  color: '#1a5fa8' },
-  { cls: 'kpi-green', color: '#1a7a4a' },
-  { cls: 'kpi-blue',  color: '#1a5fa8' },
-]
-let kpiCardIndex = 0
+// Explicit tones — never derive a card's colour from render order.
+const KPI_TONES = {
+  amber: { cls: 'kpi-amber', color: '#996600' },
+  red:   { cls: 'kpi-red',   color: '#c0392b' },
+  blue:  { cls: 'kpi-blue',  color: '#1a5fa8' },
+  green: { cls: 'kpi-green', color: '#1a7a4a' },
+} as const
+type KpiTone = keyof typeof KPI_TONES
 
-function KpiCard({ label, value, sub, badge, children }: {
-  label: string; value: string; sub?: string; badge?: React.ReactNode; children?: React.ReactNode
+function KpiCard({ label, value, sub, tone, badge, children }: {
+  label: string; value: string; sub?: string; tone: KpiTone
+  badge?: React.ReactNode; children?: React.ReactNode
 }) {
-  const style = KPI_STYLES[kpiCardIndex % KPI_STYLES.length]
-  kpiCardIndex++
+  const style = KPI_TONES[tone]
   return (
     <div className={style.cls + ' p-4'}>
       <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[.6px]" style={{ color: style.color }}>{label}</div>
@@ -184,6 +321,42 @@ function ProgressBar({ pct, color }: { pct: number; color: string }) {
   return (
     <div className="h-1.5 overflow-hidden rounded-full bg-[#f0efe9]">
       <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100,pct)}%`, background: color }}/>
+    </div>
+  )
+}
+
+function CatBreakdown({ title, color, cats, total, empty }: {
+  title: string; color: string; total: number; empty: string
+  cats: { cat: string; montant: number }[]
+}) {
+  return (
+    <div className="p-4">
+      <div className="mb-3 text-[11px] font-semibold uppercase tracking-[.6px]" style={{ color }}>{title}</div>
+      {cats.length === 0 ? (
+        <div className="flex h-20 items-center justify-center text-[12px] text-[#a8a7a2]">{empty}</div>
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          {cats.map((d, i) => {
+            const pct = total > 0 ? Math.round(d.montant / total * 100) : 0
+            return (
+              <div key={d.cat}>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[12px] font-medium">{d.cat}</span>
+                  <div className="text-right">
+                    <span className="font-mono text-[11px] font-medium">{fmt(d.montant)}</span>
+                    <span className="ml-1 text-[10px] text-[#a8a7a2]">{pct}%</span>
+                  </div>
+                </div>
+                <ProgressBar pct={pct} color={CAT_COLORS[i % CAT_COLORS.length]}/>
+              </div>
+            )
+          })}
+          <div className="mt-1 flex items-center justify-between border-t border-black/[0.06] pt-2">
+            <span className="text-[11px] text-[#a8a7a2]">Total</span>
+            <span className="font-mono text-[12px] font-medium" style={{ color }}>{fmtM(total)}</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -219,18 +392,88 @@ function MonthlyBarChart({ months, cashMvts }: { months: ReturnType<typeof getLa
   )
 }
 
-function TblHead({ cols }: { cols: { label: string; right?: boolean }[] }) {
+type SortDir = 'asc' | 'desc'
+
+// Columns carrying a `key` become sortable when `onSort` is supplied, and
+// searchable when `onFilterChange` is supplied (a magnifier opens a per-column
+// input in a second header row). Callers passing neither keep the previous
+// static behaviour — the other tables on this page are unaffected.
+function TblHead<K extends string>({
+  cols, sort, onSort, filters, openFilters, onToggleFilter, onFilterChange,
+}: {
+  cols: { label: string; right?: boolean; key?: K }[]
+  sort?: { key: K; dir: SortDir }
+  onSort?: (key: K) => void
+  filters?: Partial<Record<K, string>>
+  openFilters?: Set<K>
+  onToggleFilter?: (key: K) => void
+  onFilterChange?: (key: K, value: string) => void
+}) {
+  const base = 'border-b border-black/[0.06] bg-[#f8f7f3] px-4 py-2 text-[10px] font-medium uppercase tracking-[.6px] text-[#a8a7a2]'
+  const searchable = onFilterChange !== undefined && onToggleFilter !== undefined
+  // A column shows its input while explicitly opened OR while it holds a value,
+  // so an active filter can never be hidden from view.
+  const isOpen = (k: K) => (openFilters?.has(k) ?? false) || !!filters?.[k]
+  const anyOpen = searchable && cols.some(c => c.key !== undefined && isOpen(c.key))
+
   return (
     <thead>
       <tr>
-        {cols.map(c => (
-          <th key={c.label} className={cn(
-            'border-b border-black/[0.06] bg-[#f8f7f3] px-4 py-2 text-[10px] font-medium uppercase tracking-[.6px] text-[#a8a7a2]',
-            c.right ? 'text-right' : 'text-left')}>
-            {c.label}
-          </th>
-        ))}
+        {cols.map(c => {
+          const sortable = c.key !== undefined && onSort !== undefined
+          const active   = sortable && sort?.key === c.key
+          const filtered = c.key !== undefined && !!filters?.[c.key]
+          return (
+            <th key={c.label} className={cn(base, c.right ? 'text-right' : 'text-left')}>
+              <span className={cn('inline-flex items-center gap-1.5', c.right && 'flex-row-reverse')}>
+                <span
+                  className={cn('inline-flex items-center gap-1', sortable && 'cursor-pointer select-none hover:text-[#111110]')}
+                  onClick={sortable ? () => onSort!(c.key as K) : undefined}
+                  title={sortable ? 'Trier' : undefined}>
+                  {c.label}
+                  {sortable && (
+                    <span className={cn('text-[9px]', active ? 'text-[#1a1a18]' : 'text-[#d0cfc9]')}>
+                      {active ? (sort!.dir === 'asc' ? '▲' : '▼') : '▼'}
+                    </span>
+                  )}
+                </span>
+                {searchable && c.key !== undefined && (
+                  <button onClick={() => onToggleFilter!(c.key as K)}
+                    title={`Rechercher dans « ${c.label} »`}
+                    className={cn('flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border-none bg-transparent cursor-pointer transition-colors',
+                      filtered ? 'text-[#1a5fa8]' : 'text-[#d0cfc9] hover:text-[#6b6a66]')}>
+                    <Search size={10}/>
+                  </button>
+                )}
+              </span>
+            </th>
+          )
+        })}
       </tr>
+
+      {anyOpen && (
+        <tr>
+          {cols.map(c => (
+            <th key={c.label} className="border-b border-black/[0.06] bg-[#f8f7f3] px-2 pb-2 pt-0 font-normal">
+              {c.key !== undefined && isOpen(c.key) ? (
+                <div className="flex items-center gap-1 rounded-[7px] border border-black/[0.08] bg-white px-2 py-1 focus-within:border-[#1a5fa8]">
+                  <input autoFocus type="text"
+                    value={filters?.[c.key] ?? ''}
+                    onChange={e => onFilterChange!(c.key as K, e.target.value)}
+                    placeholder="Filtrer…"
+                    className={cn('w-full min-w-0 bg-transparent text-[11px] font-normal normal-case tracking-normal text-[#111110] outline-none placeholder:text-[#a8a7a2]', c.right && 'text-right')}/>
+                  {!!filters?.[c.key] && (
+                    <button onClick={() => onFilterChange!(c.key as K, '')} title="Effacer"
+                      className="flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded border-none bg-transparent text-[#a8a7a2] hover:text-[#c0392b] cursor-pointer">
+                      <X size={9}/>
+                    </button>
+                  )}
+                </div>
+              ) : null}
+            </th>
+          ))}
+        </tr>
+      )}
     </thead>
   )
 }
@@ -597,7 +840,7 @@ function OrderGeneratorModal({ products, onClose }: { products: Product[]; onClo
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export function ReportsPage() {
-  const { products, clients, cashMvts, ventesComptoir, fournisseurs } = useAppStore()
+  const { products, clients, cashMvts, ventesComptoir, fournisseurs, epargneMvts } = useAppStore()
 
   const [period,         setPeriod]         = useState<Period>('month')
   const [customFrom,     setCustomFrom]     = useState('')
@@ -606,6 +849,11 @@ export function ReportsPage() {
   const [showOrder,      setShowOrder]      = useState(false)
   const [dailyDate,      setDailyDate]      = useState(isoToday)
   const [dailyGlobal,    setDailyGlobal]    = useState(false)
+  const [flowGrain,      setFlowGrain]      = useState<FlowGrain>('mois')
+  const [flowAnchor,     setFlowAnchor]     = useState(isoToday)
+  const [flowSort,       setFlowSort]       = useState<{ key: FlowSortKey; dir: SortDir }>({ key: 'date', dir: 'desc' })
+  const [flowFilters,    setFlowFilters]    = useState<Partial<Record<FlowSortKey, string>>>({})
+  const [flowOpenCols,   setFlowOpenCols]   = useState<Set<FlowSortKey>>(new Set())
 
   const { from, to } = useMemo(() => getPeriodRange(period, customFrom, customTo), [period, customFrom, customTo])
 
@@ -623,12 +871,9 @@ export function ReportsPage() {
   const cashOut = useMemo(() => filteredCash(cashMvts, from, to).filter(m => m.dir === 'sortie'), [cashMvts, from, to])
 
   const prevCashIn  = useMemo(() => filteredCash(cashMvts, prevRange.from, prevRange.to).filter(m => m.dir === 'entree'), [cashMvts, prevRange])
-  const prevCashOut = useMemo(() => filteredCash(cashMvts, prevRange.from, prevRange.to).filter(m => m.dir === 'sortie'), [cashMvts, prevRange])
 
   const totalCashIn  = cashIn.reduce((s,m)=>s+m.montant,0)
-  const totalCashOut = cashOut.reduce((s,m)=>s+m.montant,0)
   const prevTotalIn  = prevCashIn.reduce((s,m)=>s+m.montant,0)
-  const prevTotalOut = prevCashOut.reduce((s,m)=>s+m.montant,0)
 
   // Client transactions in period
   const periodTx = useMemo(() => filteredClientTx(clients, from, to), [clients, from, to])
@@ -730,9 +975,71 @@ export function ReportsPage() {
   const modesData = useMemo(() => aggregateModes(cashIn), [cashIn])
   const totModes  = modesData.reduce((s,m)=>s+m.amount,0)
 
-  // Expenses by category in period
-  const depCats   = useMemo(() => aggregateCats(cashOut), [cashOut])
-  const totDep    = depCats.reduce((s,d)=>s+d.montant,0)
+  // ── Dépenses & investissements (top KPI row, main period) ──
+  // Same classifier as the dedicated section, so the two never disagree.
+  const mainFlow = useMemo(() => classifyOutflows(cashMvts, epargneMvts, from, to),
+    [cashMvts, epargneMvts, from, to])
+  const mainFlowPrev = useMemo(() => classifyOutflows(cashMvts, epargneMvts, prevRange.from, prevRange.to),
+    [cashMvts, epargneMvts, prevRange])
+
+  const depensesPeriod = sumMontant(mainFlow.depense)
+  const investPeriod   = sumMontant(mainFlow.invest)
+  const prevDepenses   = sumMontant(mainFlowPrev.depense)
+  const prevInvest     = sumMontant(mainFlowPrev.invest)
+
+  // Expenses by category in period — same classifier, so the page never shows
+  // two different totals under the label "Dépenses".
+  const depCats = useMemo(() => aggregateCats(mainFlow.depense), [mainFlow])
+  const totDep  = depensesPeriod
+
+  // ── Dédié : dépenses & investissements filtrés par jour/semaine/mois ──
+  const flowRange     = useMemo(() => grainRange(flowGrain, flowAnchor), [flowGrain, flowAnchor])
+  const flowPrevRange = useMemo(() => prevGrainRange(flowGrain, flowAnchor), [flowGrain, flowAnchor])
+
+  const flow = useMemo(() => classifyOutflows(cashMvts, epargneMvts, flowRange.from, flowRange.to),
+    [cashMvts, epargneMvts, flowRange])
+  const flowPrev = useMemo(() => classifyOutflows(cashMvts, epargneMvts, flowPrevRange.from, flowPrevRange.to),
+    [cashMvts, epargneMvts, flowPrevRange])
+
+  const flowInvMvts = flow.invest
+  const flowDepMvts = flow.depense
+  const flowTotInv  = sumMontant(flow.invest)
+  const flowTotDep  = sumMontant(flow.depense)
+  const flowPrevInv = sumMontant(flowPrev.invest)
+  const flowPrevDep = sumMontant(flowPrev.depense)
+  const flowInvCats = useMemo(() => aggregateCats(flow.invest),  [flow])
+  const flowDepCats = useMemo(() => aggregateCats(flow.depense), [flow])
+
+  // Detail table rows: combine both buckets, then search + sort.
+  const flowAllRows = useMemo((): FlowTableRow[] => [
+    ...flow.invest.map(m  => ({ m, kind: 'inv' as const })),
+    ...flow.depense.map(m => ({ m, kind: 'dep' as const })),
+  ], [flow])
+
+  // Active per-column searches combine with AND.
+  const activeFlowFilters = useMemo(() =>
+    (Object.entries(flowFilters) as [FlowSortKey, string][])
+      .map(([k, v]) => [k, norm(v.trim())] as const)
+      .filter(([, v]) => v !== '')
+  , [flowFilters])
+
+  const flowRows = useMemo(() => {
+    const matched = activeFlowFilters.length === 0
+      ? flowAllRows
+      : flowAllRows.filter(r => activeFlowFilters.every(([k, v]) => norm(rowFieldText(r, k)).includes(v)))
+    return sortFlowRows(matched, flowSort.key, flowSort.dir)
+  }, [flowAllRows, activeFlowFilters, flowSort])
+
+  const toggleFlowCol = (k: FlowSortKey) => setFlowOpenCols(prev => {
+    const next = new Set(prev)
+    if (next.has(k)) {
+      next.delete(k)
+      // Closing a column drops its filter, so hidden criteria can't silently
+      // keep narrowing the table.
+      setFlowFilters(f => { const { [k]: _drop, ...rest } = f; return rest })
+    } else next.add(k)
+    return next
+  })
 
   // Product performance (all-time cumulative)
   const prodPerf  = useMemo(() => productPerf(products), [products])
@@ -865,30 +1172,161 @@ export function ReportsPage() {
         <div className="flex flex-col gap-4">
 
           {/* ── KPI cards ── */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            <KpiCard label="Chiffre d'affaires" value={fmt(totalCashIn)} sub="Total encaissements">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <KpiCard label="Chiffre d'affaires" tone="green" value={fmt(totalCashIn)} sub="Total encaissements">
               <Delta curr={totalCashIn} prev={prevTotalIn}/>
             </KpiCard>
-            <KpiCard label="Dépenses" value={fmt(totalCashOut)} sub="Total décaissements">
-              <Delta curr={totalCashOut} prev={prevTotalOut}/>
+            <KpiCard label="Investissements" tone="amber" value={fmt(investPeriod)} sub="Achat bagages + transport">
+              <Delta curr={investPeriod} prev={prevInvest}/>
             </KpiCard>
-            <KpiCard label="Coût d'achat" value={fmt(cogs)} sub="Prix achat produits vendus">
+            <KpiCard label="Dépenses" tone="red" value={fmt(depensesPeriod)} sub="Autres sorties">
+              <Delta curr={depensesPeriod} prev={prevDepenses}/>
+            </KpiCard>
+            <KpiCard label="Coût d'achat" tone="blue" value={fmt(cogs)} sub="Prix achat produits vendus">
               <span className="inline-flex rounded-full bg-[#fff0e6] px-2 py-0.5 text-[10px] font-medium text-[#e65c00]">
                 {periodSales.reduce((s,tx)=>s+tx.lines.length,0)} lignes de vente
               </span>
             </KpiCard>
             <div onClick={() => setShowBenefice(true)} className="cursor-pointer transition-all hover:ring-2 hover:ring-[#1a1a18]/10 rounded-[12px]">
-              <KpiCard label="Bénéfice net ↗" value={fmt(benefice)} sub="Prix vente − Prix achat">
+              <KpiCard label="Bénéfice net ↗" tone="green" value={fmt(benefice)} sub="Prix vente − Prix achat">
                 <Delta curr={benefice} prev={prevBenefice}/>
               </KpiCard>
             </div>
-            <KpiCard label="Créances clients" value={fmtM(totalCreances)} sub="total impayé">
+            <KpiCard label="Créances clients" tone="red" value={fmtM(totalCreances)} sub="total impayé">
               <span className={cn('inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium',
                 totalCreances > 0 ? 'bg-[#fdecea] text-[#c0392b]' : 'bg-[#e8f5ee] text-[#1a7a4a]')}>
                 {clientsDebt.length} client{clientsDebt.length !== 1 ? 's' : ''} concerné{clientsDebt.length !== 1 ? 's' : ''}
               </span>
             </KpiCard>
           </div>
+
+          {/* ── Dépenses & Investissements — filtre jour / semaine / mois ── */}
+          <Card
+            title="Dépenses & Investissements"
+            sub={
+              <div className="flex items-center gap-2">
+                {([['jour','Jour'],['semaine','Semaine'],['mois','Mois']] as [FlowGrain, string][]).map(([g, label]) => (
+                  <button key={g} onClick={() => setFlowGrain(g)}
+                    className={cn('rounded-full border px-3 py-1 text-[11px] font-medium cursor-pointer transition-all',
+                      flowGrain === g
+                        ? 'border-[#1a1a18] bg-[#1a1a18] text-white'
+                        : 'border-black/[0.08] bg-[#f0efe9] text-[#6b6a66] hover:bg-[#e8e7e3]')}>
+                    {label}
+                  </button>
+                ))}
+                <input type="date" value={flowAnchor} max={isoToday()}
+                  onChange={e => setFlowAnchor(e.target.value)}
+                  className="rounded-[7px] border border-black/[0.08] bg-[#f0efe9] px-2 py-1 text-[11px] outline-none focus:border-[#1a1a18] focus:bg-white cursor-pointer"/>
+              </div>
+            }
+            noPad>
+            <div className="px-4 pt-2.5 pb-1 text-[11px] text-[#a8a7a2]">{grainLabel(flowGrain, flowAnchor)}</div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pb-4">
+              <KpiCard label="Investissements" tone="amber" value={fmt(flowTotInv)}
+                sub={`${flowInvMvts.length} opération${flowInvMvts.length !== 1 ? 's' : ''} · achat + transport`}>
+                <Delta curr={flowTotInv} prev={flowPrevInv}/>
+              </KpiCard>
+              <KpiCard label="Dépenses" tone="red" value={fmt(flowTotDep)}
+                sub={`${flowDepMvts.length} opération${flowDepMvts.length !== 1 ? 's' : ''} · autres sorties`}>
+                <Delta curr={flowTotDep} prev={flowPrevDep}/>
+              </KpiCard>
+              <KpiCard label="Total sorties" tone="green" value={fmt(flowTotDep + flowTotInv)}
+                sub="Investissements + dépenses">
+                <Delta curr={flowTotDep + flowTotInv} prev={flowPrevDep + flowPrevInv}/>
+              </KpiCard>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-black/[0.06] border-t border-black/[0.06]">
+              <CatBreakdown title="Investissements par catégorie" color="#996600"
+                cats={flowInvCats} total={flowTotInv} empty="Aucun investissement"/>
+              <CatBreakdown title="Dépenses par catégorie" color="#c0392b"
+                cats={flowDepCats} total={flowTotDep} empty="Aucune dépense"/>
+            </div>
+
+            {/* Détail des opérations — recherche sur description + tri par colonne */}
+            {flowAllRows.length > 0 && (
+              <div className="border-t border-black/[0.06]">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+                  <span className="text-[11px] text-[#a8a7a2]">
+                    Cliquez sur <Search size={10} className="inline align-[-1px] text-[#6b6a66]"/> dans un en-tête pour filtrer cette colonne
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-[#a8a7a2]">
+                      {activeFlowFilters.length > 0
+                        ? `${flowRows.length} / ${flowAllRows.length} opération${flowAllRows.length > 1 ? 's' : ''}`
+                        : `${flowAllRows.length} opération${flowAllRows.length > 1 ? 's' : ''}`}
+                    </span>
+                    {activeFlowFilters.length > 0 && (
+                      <button onClick={() => { setFlowFilters({}); setFlowOpenCols(new Set()) }}
+                        className="rounded-full border border-black/[0.08] bg-[#f0efe9] px-2.5 py-1 text-[10px] font-medium text-[#6b6a66] cursor-pointer hover:bg-[#e8e7e3]">
+                        Effacer les filtres
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-[12px]">
+                    <TblHead
+                      sort={flowSort}
+                      onSort={k => setFlowSort(s => ({ key: k, dir: s.key === k && s.dir === 'desc' ? 'asc' : 'desc' }))}
+                      filters={flowFilters}
+                      openFilters={flowOpenCols}
+                      onToggleFilter={toggleFlowCol}
+                      onFilterChange={(k, v) => setFlowFilters(f => ({ ...f, [k]: v }))}
+                      cols={[
+                        { label: 'Date',        key: 'date' },
+                        { label: 'Type',        key: 'kind' },
+                        { label: 'Description', key: 'desc' },
+                        { label: 'Catégorie',   key: 'cat' },
+                        { label: 'Montant',     key: 'montant', right: true },
+                      ]}/>
+                    {flowRows.length === 0 ? (
+                      <tbody>
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-[12px] text-[#a8a7a2]">
+                            Aucune opération ne correspond aux filtres
+                          </td>
+                        </tr>
+                      </tbody>
+                    ) : (
+                      <tbody>
+                        {flowRows.map(({ m, kind }, i) => {
+                          const k = KIND_META[kind]
+                          return (
+                            <tr key={`${kind}-${m.id ?? i}`} className={cn('border-b border-black/[0.04] hover:bg-[#f8f7f3]', i % 2 !== 0 && 'bg-[#fafaf8]')}>
+                              <td className="px-4 py-2.5 font-mono text-[11px] text-[#6b6a66] whitespace-nowrap">{m.date}</td>
+                              <td className="px-4 py-2.5">
+                                <span className={cn('inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium whitespace-nowrap', k.bg, k.fg)}>
+                                  {k.label}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2.5 font-medium text-[#111110]">{m.desc || '—'}</td>
+                              <td className="px-4 py-2.5 text-[#6b6a66]">{m.cat || '—'}</td>
+                              <td className={cn('px-4 py-2.5 text-right font-mono font-medium', k.fg)}>−{fmtM(m.montant)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    )}
+                    {flowRows.length > 0 && (
+                      <tfoot>
+                        <tr className="border-t border-black/[0.08] bg-[#f8f7f3] font-medium">
+                          <td className="px-4 py-2 text-[11px]" colSpan={4}>
+                            {activeFlowFilters.length > 0 ? 'Total filtré' : 'Total'} — {flowRows.length} opération{flowRows.length > 1 ? 's' : ''}
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#c0392b]">
+                            {fmtM(sumMontant(flowRows.map(r => r.m)))}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+            )}
+          </Card>
 
           {/* ── Ventes par produit ── */}
           {(() => {
