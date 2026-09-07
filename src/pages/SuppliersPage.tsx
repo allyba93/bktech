@@ -40,14 +40,16 @@ const todayStr = () => { const d = new Date(); return `${String(d.getDate()).pad
 const chanById = (name: string) => CHANNELS.find(c => c.name === name) ?? { label: name.slice(0,3).toUpperCase(), color: '#6b6a66', bg: '#f0efe9', name }
 const statById = (id: Statut) => STATUTS.find(s => s.id === id) ?? STATUTS[0]
 
+const dmyToISO     = (s: string) => { const p = s.split('/'); return p.length === 3 ? `${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}` : s }
+const isoNDaysAgo  = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
 const totalCmds = (f: Fournisseur) => f.commandes.reduce((s, c) => s + c.total, 0)
 const totalPaye = (f: Fournisseur) => f.commandes.reduce((s, c) => s + c.paid, 0)
 const resteDu   = (f: Fournisseur) => totalCmds(f) - totalPaye(f)
 const lastDate  = (f: Fournisseur) => f.commandes.length ? f.commandes[0].date : '—'
 const fStatus   = (f: Fournisseur): 'ok' | 'dette' | 'retard' => {
   if (resteDu(f) === 0) return 'ok'
-  const old = f.commandes.some(c => c.paid < c.total && parseInt(c.id.slice(2)) < 15)
-  return old ? 'retard' : 'dette'
+  const hasOldDebt = f.commandes.some(c => c.paid < c.total && dmyToISO(c.date) < isoNDaysAgo(30))
+  return hasOldDebt ? 'retard' : 'dette'
 }
 const STATUT_ORDER: Statut[] = ['preparation', 'confirme', 'production', 'en_chemin']
 
@@ -101,7 +103,8 @@ function Stepper({ statut }: { statut: Statut }) {
 // ─── Pay form panel ───────────────────────────────────────────────────────────
 function PayFormPanel({ due, onSave, onClose }: { due: number; onSave: (amounts: Record<string, number>, note: string) => void; onClose: () => void }) {
   const [amounts, setAmounts] = useState<Record<string, number>>({})
-  const [note, setNote] = useState('')
+  const [note,    setNote]    = useState('')
+  const [saving,  setSaving]  = useState(false)
   const total = CHANNELS.reduce((s, ch) => s + (amounts[ch.id] ?? 0), 0)
   const set = (id: string, v: number) => setAmounts(p => ({ ...p, [id]: v }))
 
@@ -142,8 +145,12 @@ function PayFormPanel({ due, onSave, onClose }: { due: number; onSave: (amounts:
           {total > 0 && total < due && <span className="ml-2 text-[10px] text-[#996600]">(partiel)</span>}
           {total > due && due > 0 && <span className="ml-2 text-[10px] text-[#c0392b]">⚠ dépasse la dette</span>}
         </div>
-        <button onClick={() => { if (total <= 0) { alert('Entrez au moins un montant'); return }; onSave(amounts, note || 'Paiement fournisseur') }}
-          className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#c0392b] px-3.5 py-2 text-[12px] font-medium text-white cursor-pointer hover:opacity-90">
+        <button onClick={() => {
+          if (total <= 0) { alert('Entrez au moins un montant'); return }
+          if (saving) return
+          setSaving(true)
+          onSave(amounts, note || 'Paiement fournisseur')
+        }} disabled={saving} className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#c0392b] px-3.5 py-2 text-[12px] font-medium text-white cursor-pointer hover:opacity-90 disabled:opacity-60">
           <Check size={13} /> Valider
         </button>
       </div>

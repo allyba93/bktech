@@ -9,12 +9,12 @@ import type { InvoiceData } from '@/components/InvoiceModal'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type PayMode   = { mode: string; amount: number }
-type TxLine    = { desc: string; qty: number; pu: number; total: number }
+type TxLine    = { desc: string; qty: number; pu: number; total: number; productName?: string; refId?: string }
 type Tx        = { id: string; date: string; total: number; paid: number; lines: TxLine[]; payModes: PayMode[] }
 type Payment   = { date: string; desc: string; mode?: string; amount: number; modes: PayMode[] }
 type Client    = { id: string; prenom: string; nom: string; tel: string; ville: string; email: string; type: string; credit: number; notes: string; transactions: Tx[]; payments: Payment[]; avances?: AvanceMvt[] }
 type TabName   = 'transactions' | 'paiements' | 'avances' | 'infos'
-type FilterKey = 'all' | 'impaye' | 'retard' | 'solde'
+type FilterKey = 'all' | 'impaye' | 'retard' | 'solde' | 'vieux'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CHANNELS = [
@@ -47,10 +47,12 @@ const isoToday = () => { const d = new Date(); return `${d.getFullYear()}-${Stri
 const isoMonday = () => { const d = new Date(); const diff = d.getDay() === 0 ? -6 : 1 - d.getDay(); d.setDate(d.getDate() + diff); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
 const isoFirstOfMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01` }
 const dmyToISO = (s: string) => { const p = s.split('/'); return p.length === 3 ? `${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}` : s }
+const isoNDaysAgo  = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
+const hasOldDebt   = (c: Client) => c.transactions.some(t => t.paid < t.total && dmyToISO(t.date) < isoNDaysAgo(30))
+const oldestUnpaid = (c: Client) => c.transactions.filter(t => t.paid < t.total).map(t => dmyToISO(t.date)).sort()[0] ?? null
 const cliStatus    = (c: Client): 'ok' | 'impaye' | 'retard' => {
   if (resteDu(c) === 0) return 'ok'
-  const old = c.transactions.some(t => t.paid < t.total && parseInt(t.id.slice(2)) < 265)
-  return old ? 'retard' : 'impaye'
+  return hasOldDebt(c) ? 'retard' : 'impaye'
 }
 
 
@@ -92,6 +94,7 @@ function PayFormPanel({ transactions, onSave, onClose }: {
   const [enabledModes, setEnabled]  = useState<Set<string>>(new Set())
   const [amounts, setAmounts]       = useState<Record<string, number>>({})
   const [note, setNote]             = useState('')
+  const [saving, setSaving]         = useState(false)
 
   const selTx        = unpaid.find(t => t.id === selTxId) ?? null
   const effectiveDue = selTx ? selTx.total - selTx.paid : unpaid.reduce((s, t) => s + t.total - t.paid, 0)
@@ -196,8 +199,14 @@ function PayFormPanel({ transactions, onSave, onClose }: {
           {total > effectiveDue && effectiveDue > 0 && <span className="ml-2 text-[10px] text-[#c0392b]">⚠ dépasse le dû</span>}
         </div>
         <button
-          onClick={() => { if (total <= 0) { alert('Entrez au moins un montant'); return }; onSave(amounts, note || 'Paiement', selTxId === 'all' ? null : selTxId) }}
-          className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#1a7a4a] px-3.5 py-2 text-[12px] font-medium text-white cursor-pointer hover:opacity-90">
+          disabled={saving}
+          onClick={() => {
+            if (saving) return
+            if (total <= 0) { alert('Entrez au moins un montant'); return }
+            setSaving(true)
+            onSave(amounts, note || 'Paiement', selTxId === 'all' ? null : selTxId)
+          }}
+          className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#1a7a4a] px-3.5 py-2 text-[12px] font-medium text-white cursor-pointer hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
           <Check size={13} /> Valider
         </button>
       </div>
@@ -290,7 +299,7 @@ const frefId = () => 'r' + Date.now() + Math.random().toString(36).slice(2)
 function AvanceModal({ action, solde, onClose, onSave }: {
   action: AvanceAction; solde: number
   onClose: () => void
-  onSave: (mvt: Omit<AvanceMvt, 'id'>, stockLines: StockLine[]) => void
+  onSave: (mvt: Omit<AvanceMvt, 'id'>, stockLines: StockLine[]) => Promise<void> | void
 }) {
   const { categories, addCategory, addProduct, products } = useAppStore()
   const cfg = AVANCE_COLORS[action]
@@ -338,6 +347,7 @@ function AvanceModal({ action, solde, onClose, onSave }: {
     return s + (parseInt(r.qty) || 0) * pa
   }, 0)
 
+  const [saving, setSaving] = useState(false)
   const inCls = 'rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-2 text-[13px] outline-none focus:border-[#1a1a18] focus:bg-white w-full'
   const rInCls = 'rounded-[7px] border border-black/[0.08] bg-white px-2 py-1.5 text-[12px] outline-none focus:border-[#1a1a18] w-full'
 
@@ -549,61 +559,68 @@ function AvanceModal({ action, solde, onClose, onSave }: {
 
         <div className="flex justify-end gap-2 border-t border-black/[0.08] px-5 py-3">
           <button onClick={onClose} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-4 py-2 text-[13px] font-medium cursor-pointer">Annuler</button>
-          <button onClick={async () => {
-            if (action === 'versement') {
-              if (!amt || amt <= 0) { alert('Montant invalide'); return }
-              if (solde > 0 && amt > solde) { alert(`Maximum versable : ${f(solde)} MRU`); return }
-              onSave({ date: todayStr(), time: nowTimeStr(), type: 'versement', dir: 'debit', montant: amt, desc: desc || cfg.label, modes: [{ mode, amount: amt }] }, [])
-            } else if (existMode === 'exist') {
-              if (!existProdId) { alert('Choisissez un produit'); return }
-              const validRefs = existRefs.filter(r => parseInt(r.qty) > 0)
-              if (!validRefs.length) { alert('Entrez au moins une quantité'); return }
-              const total = validRefs.reduce((s, r) => s + (parseInt(r.qty) || 0) * (parseFloat(r.pu) || 0), 0)
-              const mvtLines = validRefs.map(r => {
-                const qty = parseInt(r.qty) || 0; const pu = parseFloat(r.pu) || 0
-                return { desc: r.name, productName: existProd?.name ?? '', qty, pu, total: qty * pu }
-              })
-              onSave({
-                date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit',
-                montant: total, desc: desc || `${existProd?.name ?? ''} — stock reçu`, modes: [], lines: mvtLines,
-              }, validRefs.map(r => ({ productId: existProdId, refId: r.refId, qty: parseInt(r.qty) || 0, pu: parseFloat(r.pu) || 0 })))
-            } else {
-              if (!prodName.trim()) { alert('Entrez le nom du produit'); return }
-              if (!selectedCat) { alert('Choisissez une catégorie'); return }
-              const valid = frefs.filter(r => r.name.trim() && parseInt(r.qty) > 0)
-              if (!valid.length) { alert('Ajoutez au moins une référence avec quantité'); return }
-              if (!isSamePrice && valid.some(r => !r.prixVente || parseFloat(r.prixVente) <= 0 || !r.prixAchat || parseFloat(r.prixAchat) <= 0)) {
-                alert('Remplissez les prix vente et achat pour chaque référence'); return
+          <button disabled={saving} onClick={async () => {
+            if (saving) return
+            setSaving(true)
+            try {
+              if (action === 'versement') {
+                if (!amt || amt <= 0) { alert('Montant invalide'); return }
+                if (solde > 0 && amt > solde) { alert(`Maximum versable : ${f(solde)} MRU`); return }
+                await onSave({ date: todayStr(), time: nowTimeStr(), type: 'versement', dir: 'debit', montant: amt, desc: desc || cfg.label, modes: [{ mode, amount: amt }] }, [])
+              } else if (existMode === 'exist') {
+                if (!existProdId) { alert('Choisissez un produit'); return }
+                const validRefs = existRefs.filter(r => parseInt(r.qty) > 0)
+                if (!validRefs.length) { alert('Entrez au moins une quantité'); return }
+                const total = validRefs.reduce((s, r) => s + (parseInt(r.qty) || 0) * (parseFloat(r.pu) || 0), 0)
+                const mvtLines = validRefs.map(r => {
+                  const qty = parseInt(r.qty) || 0; const pu = parseFloat(r.pu) || 0
+                  return { desc: r.name, productName: existProd?.name ?? '', qty, pu, total: qty * pu }
+                })
+                await onSave({
+                  date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit',
+                  montant: total, desc: desc || `${existProd?.name ?? ''} — stock reçu`, modes: [], lines: mvtLines,
+                }, validRefs.map(r => ({ productId: existProdId, refId: r.refId, qty: parseInt(r.qty) || 0, pu: parseFloat(r.pu) || 0 })))
+              } else {
+                if (!prodName.trim()) { alert('Entrez le nom du produit'); return }
+                if (!selectedCat) { alert('Choisissez une catégorie'); return }
+                const valid = frefs.filter(r => r.name.trim() && parseInt(r.qty) > 0)
+                if (!valid.length) { alert('Ajoutez au moins une référence avec quantité'); return }
+                if (!isSamePrice && valid.some(r => !r.prixVente || parseFloat(r.prixVente) <= 0 || !r.prixAchat || parseFloat(r.prixAchat) <= 0)) {
+                  alert('Remplissez les prix vente et achat pour chaque référence'); return
+                }
+                if (isSamePrice && (!sharedPrix || parseFloat(sharedPrix) <= 0 || !sharedAchat || parseFloat(sharedAchat) <= 0)) {
+                  alert('Remplissez le prix de vente et le prix d\'achat uniques'); return
+                }
+                const pv = isSamePrice ? (parseFloat(sharedPrix) || 0) : 0
+                const pa = isSamePrice ? (parseFloat(sharedAchat) || 0) : 0
+                await addProduct({
+                  name: prodName.trim(), category: selectedCat.name,
+                  refs: valid.map(r => ({
+                    id: frefId(), name: r.name.trim(),
+                    stock: parseInt(r.qty) || 0,
+                    initial: parseInt(r.qty) || 0,
+                    added: 0, sorti: 0, amount: 0,
+                    prixVente: isSamePrice ? pv : (parseFloat(r.prixVente) || 0),
+                    prixAchat: isSamePrice ? pa : (parseFloat(r.prixAchat) || 0),
+                  })),
+                })
+                const total = valid.reduce((s, r) => {
+                  const rpa = isSamePrice ? pa : (parseFloat(r.prixAchat) || 0)
+                  return s + (parseInt(r.qty) || 0) * rpa
+                }, 0)
+                const mvtLines = valid.map(r => {
+                  const rpa = isSamePrice ? pa : (parseFloat(r.prixAchat) || 0)
+                  const qty = parseInt(r.qty) || 0
+                  return { desc: r.name.trim(), productName: prodName.trim(), qty, pu: rpa, total: qty * rpa }
+                })
+                await onSave({ date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit', montant: total, desc: desc || `${prodName} — ${valid.length} réf.`, modes: [], lines: mvtLines }, [])
               }
-              if (isSamePrice && (!sharedPrix || parseFloat(sharedPrix) <= 0 || !sharedAchat || parseFloat(sharedAchat) <= 0)) {
-                alert('Remplissez le prix de vente et le prix d\'achat uniques'); return
-              }
-              const pv = isSamePrice ? (parseFloat(sharedPrix) || 0) : 0
-              const pa = isSamePrice ? (parseFloat(sharedAchat) || 0) : 0
-              await addProduct({
-                name: prodName.trim(), category: selectedCat.name,
-                refs: valid.map(r => ({
-                  id: frefId(), name: r.name.trim(),
-                  stock: parseInt(r.qty) || 0,
-                  initial: parseInt(r.qty) || 0,
-                  added: 0, sorti: 0, amount: 0,
-                  prixVente: isSamePrice ? pv : (parseFloat(r.prixVente) || 0),
-                  prixAchat: isSamePrice ? pa : (parseFloat(r.prixAchat) || 0),
-                })),
-              })
-              const total = valid.reduce((s, r) => {
-                const rpa = isSamePrice ? pa : (parseFloat(r.prixAchat) || 0)
-                return s + (parseInt(r.qty) || 0) * rpa
-              }, 0)
-              const mvtLines = valid.map(r => {
-                const rpa = isSamePrice ? pa : (parseFloat(r.prixAchat) || 0)
-                const qty = parseInt(r.qty) || 0
-                return { desc: r.name.trim(), productName: prodName.trim(), qty, pu: rpa, total: qty * rpa }
-              })
-              onSave({ date: todayStr(), time: nowTimeStr(), type: 'facture', dir: 'credit', montant: total, desc: desc || `${prodName} — ${valid.length} réf.`, modes: [], lines: mvtLines }, [])
+            } finally {
+              setSaving(false)
             }
-          }} className={cn('flex items-center gap-1.5 rounded-[9px] border-none px-4 py-2 text-[13px] font-medium text-white cursor-pointer', cfg.btnCls)}>
-            <Check size={13}/> Enregistrer
+          }} className={cn('flex items-center gap-1.5 rounded-[9px] border-none px-4 py-2 text-[13px] font-medium text-white cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed', cfg.btnCls)}>
+            {saving ? <svg className="h-[13px] w-[13px] animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> : <Check size={13}/>}
+            {saving ? 'Enregistrement…' : 'Enregistrer'}
           </button>
         </div>
       </div>
@@ -987,7 +1004,7 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
     txId:     tx.id,
     date:     tx.date,
     client:   client as unknown as AppClient,
-    lines:    tx.lines.map(l => ({ desc: l.desc, productName: '', qty: l.qty, pu: l.pu, total: l.total })),
+    lines:    tx.lines.map(l => ({ desc: l.desc, productName: l.productName ?? '', qty: l.qty, pu: l.pu, total: l.total })),
     subtotal: tx.total,
     discount: 0,
     total:    tx.total,
@@ -1006,14 +1023,14 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
     let totalRem = total
 
     const updTxs = client.transactions.map(t => {
-      // If a specific invoice was selected, skip all others
       if (txId && t.id !== txId) return t
       const due = t.total - t.paid
       if (due <= 0 || totalRem <= 0) return t
       const payNow = Math.min(due, totalRem)
       totalRem -= payNow
       let leftNow = payNow
-      const newModes = [...t.payModes]
+      // Deep copy to avoid mutating Zustand state objects
+      const newModes = t.payModes.map(p => ({ ...p }))
       modesUsed.forEach(m => {
         const avail = modeRem[m.mode] ?? 0
         if (avail > 0 && leftNow > 0) {
@@ -1025,7 +1042,10 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
           else newModes.push({ mode: m.mode, amount: share })
         }
       })
-      return { ...t, paid: t.paid + payNow, payModes: newModes }
+      // Reduce Crédit by the amount paid (mirrors payClient store logic)
+      const creditEntry = newModes.find(p => p.mode === 'Crédit')
+      if (creditEntry) creditEntry.amount = Math.max(0, creditEntry.amount - payNow)
+      return { ...t, paid: t.paid + payNow, payModes: newModes.filter(p => p.amount > 0) }
     })
 
     // Update local modal state immediately for responsive UI
@@ -1277,10 +1297,10 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
         action={avanceAction}
         solde={sa}
         onClose={() => setAvanceAction(null)}
-        onSave={(mvt, stockLines) => {
-          addClientAvance(client.id, mvt)
+        onSave={async (mvt, stockLines) => {
+          const newId = await addClientAvance(client.id, mvt)
           for (const sl of stockLines) updateStockRef(sl.productId, sl.refId, sl.qty)
-          setClient(prev => ({ ...prev, avances: [{ ...mvt, id: Date.now().toString() }, ...(prev.avances ?? [])] }))
+          setClient(prev => ({ ...prev, avances: [{ ...mvt, id: newId }, ...(prev.avances ?? [])] }))
           setAvanceAction(null)
         }}
       />
@@ -1422,6 +1442,7 @@ export function ClientsPage() {
       if (filter === 'impaye' && resteDu(c) === 0) return false
       if (filter === 'retard' && cliStatus(c) !== 'retard') return false
       if (filter === 'solde'  && resteDu(c) > 0) return false
+      if (filter === 'vieux'  && !hasOldDebt(c)) return false
       if (q && !(c.prenom + ' ' + c.nom + ' ' + c.tel + ' ' + c.ville).toLowerCase().includes(q)) return false
       return true
     })
@@ -1497,19 +1518,21 @@ export function ClientsPage() {
           <option value="impaye">Impayés</option>
           <option value="retard">En retard</option>
           <option value="solde">Soldés</option>
+          <option value="vieux">Impayés &gt; 1 mois</option>
         </select>
         <div className="hidden sm:flex items-center gap-1.5">
-          {(['all', 'impaye', 'retard', 'solde'] as FilterKey[]).map(fk => (
+          {(['all', 'impaye', 'retard', 'solde', 'vieux'] as FilterKey[]).map(fk => (
             <button key={fk} onClick={() => setFilter(fk)}
               className={cn(
                 'cursor-pointer whitespace-nowrap rounded-full border px-3 py-1.5 text-[12px] font-medium transition-all',
                 filter === fk
-                  ? fk === 'all' ? 'border-[#1a1a18] bg-[#1a1a18] text-[#f5f4f0]'
+                  ? fk === 'all'   ? 'border-[#1a1a18] bg-[#1a1a18] text-[#f5f4f0]'
                   : fk === 'solde' ? 'border-[#1a7a4a] bg-[#e8f5ee] text-[#1a7a4a]'
+                  : fk === 'vieux' ? 'border-[#7b1fa2] bg-[#f5e6ff] text-[#7b1fa2]'
                   : 'border-[#c0392b] bg-[#fdecea] text-[#c0392b]'
                   : 'border-black/[0.08] bg-white text-[#6b6a66] hover:bg-[#f0efe9]',
               )}>
-              {fk === 'all' ? 'Tous' : fk === 'impaye' ? 'Impayés' : fk === 'retard' ? 'En retard' : 'Soldés'}
+              {fk === 'all' ? 'Tous' : fk === 'impaye' ? 'Impayés' : fk === 'retard' ? 'En retard' : fk === 'solde' ? 'Soldés' : '⏰ > 1 mois'}
             </button>
           ))}
         </div>
@@ -1551,6 +1574,7 @@ export function ClientsPage() {
                         {c.tel}{c.ville ? ` · ${c.ville}` : ''}
                         {lastDate(c) !== '—' ? ` · ${lastDate(c)}` : ''}
                       </div>
+                      {filter === 'vieux' && (() => { const d = oldestUnpaid(c); return d ? <span className="text-[10px] font-medium text-[#7b1fa2]">⏰ depuis {d.split('-').reverse().join('/')}</span> : null })()}
                     </div>
                     <div className="flex-shrink-0 text-right">
                       <div className={cn('font-mono text-[13px] font-semibold', rd > 0 ? 'text-[#c0392b]' : 'text-[#1a7a4a]')}>
@@ -1617,7 +1641,10 @@ export function ClientsPage() {
 
                       {/* Status + amount */}
                       <div className="flex items-end justify-between">
-                        <SBadge s={s} />
+                        <div className="flex flex-col gap-1">
+                          <SBadge s={s} />
+                          {filter === 'vieux' && (() => { const d = oldestUnpaid(c); return d ? <span className="text-[10px] font-medium text-[#7b1fa2]">⏰ {d.split('-').reverse().join('/')}</span> : null })()}
+                        </div>
                         {rd > 0
                           ? <div className="text-right">
                               <div className="font-mono text-[17px] font-bold leading-none" style={{ color: '#b5292b' }}>{f(rd)}</div>

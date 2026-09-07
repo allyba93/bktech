@@ -244,10 +244,19 @@ export function DashboardPage() {
   , [clients])
 
   const solde = useMemo(() => {
-    const entrees = cashMvts.filter(m => m.dir === 'entree').reduce((s, m) => s + m.montant, 0)
-    const sorties = cashMvts.filter(m => m.dir === 'sortie').reduce((s, m) => s + m.montant, 0)
-    return ouverture + entrees - sorties
-  }, [cashMvts, ouverture])
+    const sorted = [...cashMvts].sort((a, b) => {
+      const da = `${dmyToISO(a.date)} ${a.time ?? '00:00'}`
+      const db_ = `${dmyToISO(b.date)} ${b.time ?? '00:00'}`
+      return da < db_ ? -1 : da > db_ ? 1 : 0
+    })
+    let balance = 0
+    for (const m of sorted) {
+      if (m.type === 'ouverture') { balance = m.montant; continue }
+      if (['cloture', 'benefice', 'credit'].includes(m.type)) continue
+      balance += m.dir === 'entree' ? m.montant : -m.montant
+    }
+    return balance
+  }, [cashMvts])
 
   const alerts = useMemo(() => {
     const list: { product: string; ref: string; stock: number }[] = []
@@ -264,7 +273,7 @@ export function DashboardPage() {
         const unpaid  = c.transactions.filter(tx => tx.paid < tx.total)
         const oldest  = unpaid.map(tx => dmyToISO(tx.date)).sort()[0] ?? ''
         const daysOld = oldest ? Math.floor((Date.now() - new Date(oldest + 'T12:00:00').getTime()) / 86400000) : 0
-        return { name: (c.prenom + ' ' + c.nom).trim(), solde: balance, date: unpaid[0]?.date ?? '', overdue: daysOld > 14 }
+        return { name: (c.prenom + ' ' + c.nom).trim(), solde: balance, date: unpaid[0]?.date ?? '', overdue: daysOld > 29 }
       })
       .filter(c => c.solde > 0)
       .sort((a, b) => b.solde - a.solde)
