@@ -42,8 +42,10 @@ function PickingPanel({ draft, onClose }: { draft: DraftInvoice; onClose: () => 
   const { picked, total } = progress(draft)
   const allPicked = picked === total && total > 0
 
-  const handleCheckAll = () => {
-    draft.lines.forEach((l, i) => { if (!l.picked) toggleDraftLine(draft.id, i) })
+  const handleCheckAll = async () => {
+    for (let i = 0; i < draft.lines.length; i++) {
+      if (!draft.lines[i].picked) await toggleDraftLine(draft.id, i)
+    }
   }
 
   const handleValidate = async () => {

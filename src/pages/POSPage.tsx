@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { Search, X, Check, RotateCcw } from 'lucide-react'
 import { useCartStore } from '@/store/cartStore'
 import { useAuthStore } from '@/store/authStore'
@@ -556,12 +556,24 @@ export function POSPage() {
   const { appUser } = useAuthStore()
   const isOwner = appUser?.role === 'owner'
 
-  const { products: storeProducts, categories, clients, ventesComptoir, addVente, annulerVente, addClientAvance, boutiqueFermee } = useAppStore()
+  const { products: storeProducts, categories, clients, ventesComptoir, addVente, annulerVente, addClientAvance, addDraftInvoice, boutiqueFermee } = useAppStore()
   const products = storeProducts as unknown as Product[]
   const ALL_CATS = Array.from(new Set(products.map(p => p.category)))
 
   const { lines, addLines, updateQty: updateCartQty, removeLines,
-    adjPrice, setAdjPrice, clearCart } = useCartStore()
+    adjPrice, setAdjPrice, clearCart, syncStocks } = useCartStore()
+
+  // Sync cart line stock values whenever live product data changes
+  useEffect(() => {
+    const productMap = new Map<string, Product>()
+    products.forEach(p => productMap.set(p.id, p))
+    syncStocks((productId, refId) => {
+      const p = productMap.get(productId)
+      if (!p) return 0
+      const ref = p.refs?.find((r: { id: string }) => r.id === refId)
+      return ref?.stock ?? 0
+    })
+  }, [storeProducts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [search, setSearch] = useState('')
   const [activeCats, setActiveCats] = useState<Set<string>>(new Set())
@@ -753,6 +765,34 @@ export function POSPage() {
     setConfirming(false)
   }
 
+  const [creatingDraft, setCreatingDraft] = useState(false)
+  const handleBonDeSortie = async () => {
+    if (lines.length === 0 || creatingDraft) return
+    setCreatingDraft(true)
+    try {
+      const draftLines = lines.map(l => ({
+        desc: l.refName, productName: l.productName,
+        qty: l.qty, pu: l.adjPrice ?? l.unitPrice,
+        total: (l.adjPrice ?? l.unitPrice) * l.qty,
+        picked: false, productId: l.productId, refId: l.refId,
+      }))
+      const draftTotal = total
+      await addDraftInvoice({
+        date: todayStr(),
+        clientName: selectedClient ? `${selectedClient.prenom} ${selectedClient.nom}`.trim() : 'Comptoir',
+        clientId: clientId ?? null,
+        total: draftTotal,
+        paid: 0,
+        payModes: [{ mode: 'Crédit', amount: draftTotal }],
+        lines: draftLines,
+      })
+      handleReset()
+      alert('Bon de sortie créé — voir la page Préparation.')
+    } finally {
+      setCreatingDraft(false)
+    }
+  }
+
   const handleConfirmOE = useCallback((newLines: CartLine[]) => {
     const pid = newLines[0]?.productId
     if (pid) lines.filter(l => l.productId === pid).forEach(l => removeLines(l.key))
@@ -850,6 +890,7 @@ export function POSPage() {
   // Confirm button state
   const getCfmState = () => {
     if (!lines.length) return 'off'
+    if (lines.some(l => l.stock === 0)) return 'off'
     if (payType === 'credit') return 'credit'
     if (payType === 'total' && totalPaid >= total) return 'ready'
     if (payType === 'partiel' && totalPaid > 0 && totalPaid < total) return 'partial'
@@ -1185,9 +1226,12 @@ export function POSPage() {
             const eff = line.adjPrice ?? line.unitPrice
             const hasDisc = line.adjPrice !== null && line.adjPrice < line.unitPrice
             return (
-              <div key={line.key} className="flex items-center gap-2 border-b border-black/[0.08] px-3.5 py-2.5">
+              <div key={line.key} className={cn('flex items-center gap-2 border-b border-black/[0.08] px-3.5 py-2.5', line.stock === 0 && 'bg-[#fdecea]/40')}>
                 <div className="flex-1 min-w-0">
-                  <div className="truncate text-[12px] font-medium text-[#111110]">{line.refName}</div>
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="truncate text-[12px] font-medium text-[#111110]">{line.refName}</span>
+                    {line.stock === 0 && <span className="flex-shrink-0 rounded px-1 py-0.5 text-[9px] font-bold bg-[#fdecea] text-[#c0392b]">RUPTURE</span>}
+                  </div>
                   <div className="mt-0.5 truncate text-[10px] text-[#6b6a66]">{line.productName}</div>
                   <div className="mt-0.5 font-mono text-[11px] text-[#6b6a66]">
                     {hasDisc ? (
@@ -1349,6 +1393,17 @@ export function POSPage() {
                   <svg viewBox="0 0 24 24" width={13} height={13} fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   Boutique fermée — ouvrez la caisse pour vendre
                 </div>
+              )}
+              {isOwner && lines.length > 0 && !boutiqueFermee && (
+                <button
+                  onClick={handleBonDeSortie}
+                  disabled={creatingDraft}
+                  className="flex w-full items-center justify-center gap-2 rounded-[11px] border border-[#b0c4de] bg-[#e8f0fb] py-2.5 text-[13px] font-medium text-[#1a5fa8] cursor-pointer hover:opacity-90 transition-all">
+                  {creatingDraft
+                    ? <svg className="h-[13px] w-[13px] animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                    : <svg className="h-[13px] w-[13px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>}
+                  {creatingDraft ? 'Création…' : 'Bon de sortie'}
+                </button>
               )}
               <button
                 onClick={!boutiqueFermee && cfmState !== 'off' && !confirming ? handleConfirmSale : undefined}

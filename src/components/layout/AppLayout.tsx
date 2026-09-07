@@ -11,6 +11,7 @@ import { CASHIER_ROUTES, CHINE_ROUTES } from '@/App'
 const NAV_ALL = [
   { to: '/dashboard',   label: 'Tableau de bord', icon: LayoutGrid,   section: 'Principal' },
   { to: '/pos',         label: 'Point de Vente',  icon: ShoppingCart, section: null },
+  { to: '/preparation', label: 'Préparation',     icon: ClipboardCheck, section: null },
   { to: '/stock',       label: 'Stock',           icon: Package,      section: null },
   { to: '/clients',     label: 'Clients',         icon: Users,        section: 'Finance' },
   { to: '/suppliers',   label: 'Fournisseurs',    icon: Truck,        section: null },

@@ -5,16 +5,17 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { LoginPage } from '@/pages/LoginPage'
 
 // Pages
-import { DashboardPage }   from '@/pages/DashboardPage'
-import { POSPage }         from '@/pages/POSPage'
-import { StockPage }       from '@/pages/StockPage'
-import { ClientsPage }     from '@/pages/ClientsPage'
-import { SuppliersPage }   from '@/pages/SuppliersPage'
-import { CashPage }        from '@/pages/CashPage'
-import { ReportsPage }     from '@/pages/ReportsPage'
-import { ChinePage }       from '@/pages/ChinePage'
+import { DashboardPage }    from '@/pages/DashboardPage'
+import { POSPage }          from '@/pages/POSPage'
+import { StockPage }        from '@/pages/StockPage'
+import { ClientsPage }      from '@/pages/ClientsPage'
+import { SuppliersPage }    from '@/pages/SuppliersPage'
+import { CashPage }         from '@/pages/CashPage'
+import { ReportsPage }      from '@/pages/ReportsPage'
+import { ChinePage }        from '@/pages/ChinePage'
+import { PreparationPage }  from '@/pages/PreparationPage'
 // Routes by role
-const CASHIER_ROUTES = ['/pos', '/cash', '/stock']
+const CASHIER_ROUTES = ['/pos', '/cash', '/stock', '/preparation']
 const CHINE_ROUTES   = ['/chine']
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -76,6 +77,7 @@ export default function App() {
           <Route path="pos"         element={<POSPage />} />
           <Route path="stock"       element={<StockPage />} />
           <Route path="cash"        element={<CashPage />} />
+          <Route path="preparation" element={<PreparationPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
