@@ -51,10 +51,14 @@ export interface Tx {
 export interface ClientPaymentRec { date: string; desc: string; amount: number; modes: PayMode[] }
 export interface AvanceMvt {
   id: string; date: string; time: string
-  type: 'depot' | 'facture' | 'versement' | 'achat'
+  // 'imputation' : l'avoir éteint une dette existante au lieu d'être versé en
+  // espèces. Aucun mouvement de caisse — l'argent n'a jamais bougé.
+  type: 'depot' | 'facture' | 'versement' | 'achat' | 'imputation'
   dir: 'credit' | 'debit'
   montant: number; desc: string; modes: PayMode[]
   lines?: { desc: string; productName: string; qty: number; pu: number; total: number }[]
+  // Détail par facture, indispensable pour pouvoir annuler l'imputation.
+  imputations?: { txId: string; montant: number }[]
 }
 export interface Client {
   id: string; prenom: string; nom: string; tel: string; ville: string
@@ -153,6 +157,7 @@ interface AppState {
   deleteVente:      (txId: string, clientId: string | null) => Promise<void>
   payClient:        (clientId: string, amounts: Record<string, number>, note: string) => Promise<void>
   addClientAvance:    (clientId: string, mvt: Omit<AvanceMvt, 'id'>) => Promise<string>
+  imputeAvoir:        (clientId: string, allocations: { txId: string; montant: number }[], desc: string) => Promise<void>
   updateClientAvance: (clientId: string, mvt: AvanceMvt) => Promise<void>
   deleteClientAvance: (clientId: string, mvtId: string) => Promise<void>
 
@@ -752,6 +757,65 @@ export const useAppStore = create<AppState>((set, get) => ({
     return newMvt.id
   },
 
+  // Éteint tout ou partie de la dette d'un client avec son avoir, au lieu de le
+  // lui verser en espèces. Volontairement SANS écriture de caisse : l'argent est
+  // déjà entré lors du dépôt, en réenregistrer une entrée compterait la même
+  // somme deux fois dans le chiffre d'affaires. Le mode 'Avance' est déjà exclu
+  // des agrégats monétaires ailleurs dans l'app.
+  imputeAvoir: async (clientId, allocations, desc) => {
+    const client = get().clients.find(c => c.id === clientId)
+    if (!client) return
+    const wanted = allocations.filter(a => a.montant > 0)
+    if (wanted.length === 0) return
+
+    const solde = (client.avances ?? []).reduce((s, m) => m.dir === 'credit' ? s + m.montant : s - m.montant, 0)
+    const demande = wanted.reduce((s, a) => s + a.montant, 0)
+    if (demande > solde) throw new Error(`Avoir insuffisant : ${solde} disponible, ${demande} demandé`)
+
+    const byTx: Record<string, number> = {}
+    wanted.forEach(a => { byTx[a.txId] = (byTx[a.txId] ?? 0) + a.montant })
+
+    // Plafonne chaque imputation au restant dû, et retient ce qui a réellement
+    // été appliqué — c'est ce détail qui rend l'annulation possible.
+    const applied: { txId: string; montant: number }[] = []
+    const updTxs = client.transactions.map(tx => {
+      const want = byTx[tx.id]
+      if (!want) return tx
+      const pay = Math.min(want, tx.total - tx.paid)
+      if (pay <= 0) return tx
+      applied.push({ txId: tx.id, montant: pay })
+      const newModes = tx.payModes.map(p => ({ ...p }))
+      const ex = newModes.find(p => p.mode === 'Avance')
+      if (ex) ex.amount += pay
+      else newModes.push({ mode: 'Avance', amount: pay })
+      const creditEntry = newModes.find(p => p.mode === 'Crédit')
+      if (creditEntry) creditEntry.amount = Math.max(0, creditEntry.amount - pay)
+      return { ...tx, paid: tx.paid + pay, payModes: newModes.filter(p => p.amount > 0) }
+    })
+
+    const total = applied.reduce((s, a) => s + a.montant, 0)
+    if (total <= 0) return
+
+    const label = desc || 'Imputation avoir sur dette'
+    const mvt: AvanceMvt = {
+      id: genId(), date: todayStr(), time: nowTime(),
+      type: 'imputation', dir: 'debit', montant: total, desc: label,
+      modes: [{ mode: 'Avance', amount: total }],
+      imputations: applied,
+    }
+    // Pas d'entrée dans `payments` : le mouvement figure déjà dans l'historique
+    // des avoirs et le mode 'Avance' apparaît sur chaque facture. Ces
+    // enregistrements n'ayant pas d'identifiant, en ajouter un rendrait
+    // l'annulation approximative. Même choix que le règlement par avance au POS.
+    const updated: Client = {
+      ...client,
+      transactions: updTxs,
+      avances: [...(client.avances ?? []), mvt],
+    }
+    set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
+    await saveClient(updated)
+  },
+
   updateClientAvance: async (clientId, mvt) => {
     const client = get().clients.find(c => c.id === clientId)
     if (!client) return
@@ -773,7 +837,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     const client = get().clients.find(c => c.id === clientId)
     if (!client) return
     const mvt = (client.avances ?? []).find(a => a.id === mvtId)
-    const updated = { ...client, avances: (client.avances ?? []).filter(a => a.id !== mvtId) }
+
+    // Annuler une imputation doit rendre aux factures ce qui leur avait été
+    // imputé : sinon l'avoir est restitué alors que la dette reste éteinte,
+    // et l'argent apparaît deux fois.
+    let transactions = client.transactions
+    if (mvt?.type === 'imputation' && mvt.imputations?.length) {
+      const byTx: Record<string, number> = {}
+      mvt.imputations.forEach(i => { byTx[i.txId] = (byTx[i.txId] ?? 0) + i.montant })
+      transactions = client.transactions.map(tx => {
+        const undo = Math.min(byTx[tx.id] ?? 0, tx.paid)
+        if (undo <= 0) return tx
+        const newModes = tx.payModes.map(p => ({ ...p }))
+        const av = newModes.find(p => p.mode === 'Avance')
+        if (av) av.amount = Math.max(0, av.amount - undo)
+        const cr = newModes.find(p => p.mode === 'Crédit')
+        if (cr) cr.amount += undo
+        else newModes.push({ mode: 'Crédit', amount: undo })
+        return { ...tx, paid: tx.paid - undo, payModes: newModes.filter(p => p.amount > 0) }
+      })
+    }
+
+    const updated = { ...client, transactions, avances: (client.avances ?? []).filter(a => a.id !== mvtId) }
     set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
     await saveClient(updated)
     // Delete cashMvt for versement (don't go through deleteCashMvt which has unrelated reversal logic)

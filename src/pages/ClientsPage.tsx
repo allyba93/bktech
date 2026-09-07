@@ -285,11 +285,12 @@ function FacturePanel({ tx, onClose, onEncaisser, boutiqueFermee }: {
 }
 
 // ─── Avance action modal ──────────────────────────────────────────────────────
-type AvanceAction = 'facture' | 'versement'
+type AvanceAction = 'facture' | 'versement' | 'imputation'
 
 const AVANCE_COLORS = {
-  facture:   { color: '#1a5fa8', bg: '#e8f0fb', label: 'Facture / marchandise reçue', btnCls: 'bg-[#1a5fa8]' },
-  versement: { color: '#c0392b', bg: '#fdecea', label: 'Versement au client', btnCls: 'bg-[#c0392b]' },
+  facture:    { color: '#1a5fa8', bg: '#e8f0fb', label: 'Facture / marchandise reçue', btnCls: 'bg-[#1a5fa8]' },
+  versement:  { color: '#c0392b', bg: '#fdecea', label: 'Versement au client', btnCls: 'bg-[#c0392b]' },
+  imputation: { color: '#7c3aed', bg: '#f0e8ff', label: 'Imputation sur dette', btnCls: 'bg-[#7c3aed]' },
 }
 
 type StockLine = { productId: string; refId: string; qty: number; pu: number }
@@ -642,9 +643,11 @@ function EditAvanceModal({ mvt, onClose, onSave, onDelete }: {
 
   const typeLabel: Record<AvanceMvt['type'], string> = {
     depot: 'Dépôt', facture: 'Facture reçue', versement: 'Versement', achat: 'Achat sur avoir',
+    imputation: 'Imputation sur dette',
   }
   const typeColor: Record<AvanceMvt['type'], string> = {
     depot: '#1a7a4a', facture: '#1a5fa8', versement: '#c0392b', achat: '#996600',
+    imputation: '#7c3aed',
   }
   const color = typeColor[mvt.type]
   const inCls = 'rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-2 text-[13px] outline-none focus:border-[#1a1a18] focus:bg-white w-full'
@@ -673,6 +676,24 @@ function EditAvanceModal({ mvt, onClose, onSave, onDelete }: {
           <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg border-none bg-[#f0efe9] cursor-pointer"><X size={13} className="text-[#6b6a66]"/></button>
         </div>
         <div className="flex flex-col gap-3.5 p-5">
+          {/* Une imputation n'est pas modifiable : changer son montant ne
+              recalculerait pas les factures créditées, l'avoir et la dette
+              divergeraient. La suppression, elle, restaure les deux. */}
+          {mvt.type === 'imputation' ? (
+            <div className="flex flex-col gap-2 rounded-[10px] bg-[#f0e8ff] px-3.5 py-3 text-[12px] text-[#7c3aed]">
+              <span className="font-medium">Imputation de {f(mvt.montant)} MRU sur la dette</span>
+              <span className="leading-relaxed opacity-90">
+                Une imputation ne se modifie pas : les factures réglées ne seraient pas
+                recalculées. Supprimez-la pour tout annuler — l'avoir et le solde des
+                factures concernées seront restaurés.
+              </span>
+              {mvt.imputations?.length ? (
+                <span className="text-[11px] opacity-75">
+                  {mvt.imputations.length} facture{mvt.imputations.length > 1 ? 's' : ''} : {mvt.imputations.map(i => `${i.txId} (${f(i.montant)})`).join(' · ')}
+                </span>
+              ) : null}
+            </div>
+          ) : (<>
           <div className="flex flex-col gap-1.5">
             <label className="text-[12px] font-medium text-[#6b6a66]">Montant (MRU)</label>
             <input type="number" autoFocus value={montant} onChange={e => setMontant(e.target.value)} placeholder="0" className={inCls}/>
@@ -689,6 +710,7 @@ function EditAvanceModal({ mvt, onClose, onSave, onDelete }: {
             <label className="text-[12px] font-medium text-[#6b6a66]">Description</label>
             <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Note…" className={inCls}/>
           </div>
+          </>)}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-black/[0.08] px-5 py-3">
           {confirm
@@ -702,11 +724,142 @@ function EditAvanceModal({ mvt, onClose, onSave, onDelete }: {
               </button>
           }
           <div className="flex gap-2">
-            <button onClick={onClose} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-4 py-2 text-[13px] font-medium cursor-pointer">Annuler</button>
-            <button onClick={handleSave} className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#1a1a18] px-4 py-2 text-[13px] font-medium text-white cursor-pointer">
-              <Check size={13}/> Enregistrer
+            <button onClick={onClose} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-4 py-2 text-[13px] font-medium cursor-pointer">
+              {mvt.type === 'imputation' ? 'Fermer' : 'Annuler'}
             </button>
+            {mvt.type !== 'imputation' && (
+              <button onClick={handleSave} className="flex items-center gap-1.5 rounded-[9px] border-none bg-[#1a1a18] px-4 py-2 text-[13px] font-medium text-white cursor-pointer">
+                <Check size={13}/> Enregistrer
+              </button>
+            )}
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Imputation de l'avoir sur la dette ──────────────────────────────────────
+// Éteint des factures impayées avec l'avoir du client au lieu de le lui verser
+// en espèces. Aucun mouvement de caisse : l'argent est déjà entré au dépôt.
+function ImputationModal({ client, solde, onClose, onDone }: {
+  client: Client
+  solde: number
+  onClose: () => void
+  onDone: (allocations: { txId: string; montant: number }[], desc: string) => Promise<void>
+}) {
+  const cfg = AVANCE_COLORS.imputation
+  const inCls = 'rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-3 py-2 text-[13px] outline-none focus:border-[#1a1a18] focus:bg-white w-full'
+
+  const impayees = client.transactions
+    .filter(t => t.total - t.paid > 0)
+    .sort((a, b) => dmyToISO(a.date).localeCompare(dmyToISO(b.date)))
+
+  // Pré-remplissage : les plus anciennes d'abord, jusqu'à épuisement de l'avoir.
+  const [sel, setSel] = useState<Record<string, string>>(() => {
+    let reste = solde
+    const init: Record<string, string> = {}
+    for (const t of impayees) {
+      if (reste <= 0) break
+      const p = Math.min(t.total - t.paid, reste)
+      init[t.id] = String(p)
+      reste -= p
+    }
+    return init
+  })
+  const [desc, setDesc]     = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const total = Object.values(sel).reduce((s, v) => s + (parseFloat(v) || 0), 0)
+  const reste = solde - total
+
+  const toggle = (t: Tx) => setSel(prev => {
+    const n = { ...prev }
+    if (t.id in n) { delete n[t.id]; return n }
+    const used = Object.values(prev).reduce((s, v) => s + (parseFloat(v) || 0), 0)
+    n[t.id] = String(Math.max(0, Math.min(t.total - t.paid, solde - used)))
+    return n
+  })
+
+  const submit = async () => {
+    if (saving) return
+    if (total <= 0)     { alert('Sélectionnez au moins une facture'); return }
+    if (total > solde)  { alert(`Avoir insuffisant : ${f(solde)} MRU disponible`); return }
+    for (const t of impayees) {
+      const v = parseFloat(sel[t.id] ?? '0') || 0
+      if (v > t.total - t.paid) { alert(`Facture ${t.id} : maximum ${f(t.total - t.paid)} MRU`); return }
+    }
+    setSaving(true)
+    try {
+      await onDone(
+        Object.entries(sel).map(([txId, v]) => ({ txId, montant: parseFloat(v) || 0 })).filter(a => a.montant > 0),
+        desc.trim(),
+      )
+    } catch (e) {
+      // Garde-fou du store (avoir insuffisant) : sans ça l'échec serait muet.
+      alert(e instanceof Error ? e.message : "L'imputation a échoué")
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/45" onClick={onClose}>
+      <div className="flex flex-col overflow-hidden rounded-t-2xl sm:rounded-2xl border border-black/[0.08] bg-white w-full sm:w-[560px] max-h-[92vh]"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b px-5 py-4" style={{ borderColor: cfg.color + '30', background: cfg.bg }}>
+          <div>
+            <h2 className="text-[15px] font-medium" style={{ color: cfg.color }}>{cfg.label}</h2>
+            <div className="mt-0.5 text-[11px]" style={{ color: cfg.color }}>
+              Avoir disponible : {f(solde)} MRU — aucun mouvement de caisse
+            </div>
+          </div>
+          <button onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-lg border-none bg-white/60 cursor-pointer"><X size={13}/></button>
+        </div>
+
+        <div className="flex flex-col gap-3.5 overflow-y-auto p-5" style={{ scrollbarWidth: 'thin' }}>
+          {impayees.length === 0 ? (
+            <p className="py-6 text-center text-[13px] text-[#a8a7a2]">Ce client n'a aucune facture impayée.</p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {impayees.map(t => {
+                const du = t.total - t.paid
+                const on = t.id in sel
+                return (
+                  <div key={t.id} className="flex items-center gap-3 rounded-[10px] border border-black/[0.08] px-3 py-2"
+                    style={on ? { background: cfg.bg, borderColor: cfg.color + '40' } : undefined}>
+                    <input type="checkbox" checked={on} onChange={() => toggle(t)} className="h-4 w-4 cursor-pointer accent-[#7c3aed]"/>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-[13px] font-medium">{t.id}</span>
+                      <span className="text-[11px] text-[#a8a7a2]">{t.date} — reste dû {f(du)} MRU</span>
+                    </div>
+                    {on && (
+                      <input type="number" value={sel[t.id]} max={du} min={0}
+                        onChange={e => setSel(prev => ({ ...prev, [t.id]: e.target.value }))}
+                        className={inCls + ' w-28 text-right'}/>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <input value={desc} onChange={e => setDesc(e.target.value)}
+            placeholder="Libellé (optionnel)" className={inCls}/>
+
+          <div className="flex flex-col gap-1 rounded-[10px] bg-[#f0efe9] px-3 py-2.5 text-[12px]">
+            <div className="flex justify-between"><span className="text-[#6b6a66]">Total imputé</span><span className="font-mono font-medium">{f(total)} MRU</span></div>
+            <div className="flex justify-between">
+              <span className="text-[#6b6a66]">Avoir restant après</span>
+              <span className="font-mono font-medium" style={{ color: reste < 0 ? '#c0392b' : undefined }}>{f(reste)} MRU</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-black/[0.08] px-5 py-3">
+          <button onClick={onClose} className="rounded-[9px] border border-black/[0.08] bg-[#f0efe9] px-4 py-2 text-[13px] font-medium cursor-pointer">Annuler</button>
+          <button onClick={submit} disabled={saving || total <= 0 || reste < 0}
+            className={`rounded-[9px] border-none px-4 py-2 text-[13px] font-medium text-white cursor-pointer disabled:opacity-40 ${cfg.btnCls}`}>
+            {saving ? 'Imputation…' : 'Imputer'}
+          </button>
         </div>
       </div>
     </div>
@@ -728,12 +881,14 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
 
   const typeLabel: Record<AvanceMvt['type'], string> = {
     depot: 'Dépôt', facture: 'Facture reçue', versement: 'Versement', achat: 'Achat sur avoir',
+    imputation: 'Imputation sur dette',
   }
   const typeColor: Record<AvanceMvt['type'], { color: string; bg: string }> = {
     depot:     { color: '#1a7a4a', bg: '#e8f5ee' },
     facture:   { color: '#1a5fa8', bg: '#e8f0fb' },
     versement: { color: '#c0392b', bg: '#fdecea' },
     achat:     { color: '#996600', bg: '#fdf3dc' },
+    imputation:{ color: '#7c3aed', bg: '#f0e8ff' },
   }
 
   return (<>
@@ -762,7 +917,7 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
       </div>
 
       {/* Action buttons */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <button onClick={() => onAction('facture')}
           className="flex flex-col items-center gap-1.5 rounded-[12px] border border-[#1a5fa8]/30 bg-[#e8f0fb] px-2 py-3 cursor-pointer hover:opacity-80 transition-opacity">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1a5fa8]">
@@ -777,6 +932,15 @@ function AvancesTab({ client, onAction, onOpenInvoice }: {
             <svg className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 2v20M2 12h20"/><line x1="20" y1="12" x2="4" y2="12"/></svg>
           </div>
           <span className="text-center text-[11px] font-medium text-[#c0392b] leading-tight">Versement</span>
+        </button>
+        <button onClick={() => onAction('imputation')}
+          disabled={solde <= 0 || resteDu(client) <= 0}
+          title={solde <= 0 ? 'Aucun avoir disponible' : resteDu(client) <= 0 ? 'Ce client n\'a aucune dette' : 'Éteindre la dette avec l\'avoir'}
+          className="flex flex-col items-center gap-1.5 rounded-[12px] border border-[#7c3aed]/30 bg-[#f0e8ff] px-2 py-3 cursor-pointer hover:opacity-80 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#7c3aed]">
+            <svg className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+          </div>
+          <span className="text-center text-[11px] font-medium text-[#7c3aed] leading-tight">Imputer sur dette</span>
         </button>
       </div>
 
@@ -978,7 +1142,7 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
   onPayment: (clientId: string, amounts: Record<string, number>, note: string) => void
   boutiqueFermee: boolean
 }) {
-  const { addClientAvance, updateStockRef } = useAppStore()
+  const { addClientAvance, updateStockRef, imputeAvoir } = useAppStore()
   const [client, setClient]     = useState<Client>(initial)
   const [tab, setTab]           = useState<TabName>('transactions')
   const [invoiceTx, setInvoiceTx] = useState<Tx | null>(null)
@@ -1292,7 +1456,22 @@ function ClientModal({ initial, onClose, onUpdate, onPayment, boutiqueFermee }: 
         onClose={() => setAvoirInvoice(null)}
       />
     )}
-    {avanceAction && (
+    {avanceAction === 'imputation' && (
+      <ImputationModal
+        client={client}
+        solde={sa}
+        onClose={() => setAvanceAction(null)}
+        onDone={async (allocations, desc) => {
+          await imputeAvoir(client.id, allocations, desc)
+          // Le store est la source de vérité : on relit le client mis à jour
+          // plutôt que de recalculer les factures une seconde fois ici.
+          const fresh = useAppStore.getState().clients.find(c => c.id === client.id)
+          if (fresh) setClient(fresh)
+          setAvanceAction(null)
+        }}
+      />
+    )}
+    {avanceAction && avanceAction !== 'imputation' && (
       <AvanceModal
         action={avanceAction}
         solde={sa}
