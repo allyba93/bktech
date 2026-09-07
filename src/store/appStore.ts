@@ -92,6 +92,15 @@ export interface DetteDiverse {
   currency?: 'MRU' | 'CFA'
 }
 
+export interface DraftLine {
+  desc: string; productName?: string; qty: number; pu: number; total: number
+  picked: boolean; productId?: string; refId?: string
+}
+export interface DraftInvoice {
+  id: string; date: string; clientName: string; clientId?: string | null
+  total: number; paid: number; payModes: PayMode[]; lines: DraftLine[]
+}
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 interface AppState {
@@ -107,6 +116,7 @@ interface AppState {
   soldeEpargne:    number
   epargneMvts:     EpargneMvt[]
   dettesDiverses:  DetteDiverse[]
+  draftInvoices:   DraftInvoice[]
 
   // Loading
   loaded: boolean
@@ -142,7 +152,7 @@ interface AppState {
   annulerVente:     (txId: string, clientId: string | null) => Promise<Tx | null>
   deleteVente:      (txId: string, clientId: string | null) => Promise<void>
   payClient:        (clientId: string, amounts: Record<string, number>, note: string) => Promise<void>
-  addClientAvance:    (clientId: string, mvt: Omit<AvanceMvt, 'id'>) => Promise<void>
+  addClientAvance:    (clientId: string, mvt: Omit<AvanceMvt, 'id'>) => Promise<string>
   updateClientAvance: (clientId: string, mvt: AvanceMvt) => Promise<void>
   deleteClientAvance: (clientId: string, mvtId: string) => Promise<void>
 
@@ -174,6 +184,12 @@ interface AppState {
   deleteDetteAjout:   (detteId: string, ajoutId: string, by: string) => Promise<void>
   deleteDetteDiverse: (id: string) => Promise<void>
 
+  // Actions — Draft Invoices (Bons de sortie)
+  addDraftInvoice:      (d: Omit<DraftInvoice, 'id'>) => Promise<string>
+  toggleDraftLine:      (draftId: string, lineIdx: number) => Promise<void>
+  validateDraftInvoice: (draftId: string) => Promise<void>
+  deleteDraftInvoice:   (draftId: string) => Promise<void>
+
   // Admin
   recalculateStockFromSortie: () => Promise<{ updated: number; totalSorti: number }>
 
@@ -188,7 +204,7 @@ const todayStr = () => {
 }
 const nowTime = () => {
   const d = new Date()
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`
 }
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2)
 const nowDateTime = () => `${todayStr()} ${nowTime()}`
@@ -205,6 +221,7 @@ const COL = {
   ventesComptoir:  'ventesComptoir',
   epargneMvts:     'epargneMvts',
   dettesDiverses:  'dettesDiverses',
+  draftInvoices:   'draftInvoices',
   settings:        'settings',
 }
 
@@ -253,6 +270,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   ventesComptoir:  [],
   epargneMvts:     [],
   dettesDiverses:  [],
+  draftInvoices:   [],
   ouverture:       0,
   boutiqueFermee:  false,
   soldeEpargne:    0,
@@ -582,6 +600,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       await addDoc(collection(db, COL.ventesComptoir), { ...newTx, createdAt: serverTimestamp() })
     }
 
+    // Decrement stock immediately at sale creation so all devices see updated stock via Firestore
+    for (const l of lines) {
+      if (l.productId && l.refId) {
+        get().updateStockRef(l.productId, l.refId, -l.qty, { qty: l.qty, amount: l.total })
+      }
+    }
+
     const clientName = clientId ? (get().clients.find(c => c.id === clientId)?.prenom ?? '') : ''
     const mvtDesc = `Vente ${txId}${clientName ? ' — ' + clientName : ''}`
 
@@ -622,13 +647,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         console.error('annulerVente delete error:', e)
       }
     }
-    // Reverse stock only for lines that were actually dispatched (sortedLines=true)
-    // sortedLines undefined → old sale (stock was decreased at creation) → reverse all
-    const sorted = tx.sortedLines
-    tx.lines.forEach((l, i) => {
+    // Always restore stock — it was decremented at sale creation for all lines
+    tx.lines.forEach(l => {
       if (!l.productId || !l.refId) return
-      const wasSorted = sorted ? sorted[i] === true : true
-      if (wasSorted) get().updateStockRef(l.productId, l.refId, +l.qty, { qty: -l.qty, amount: -l.total })
+      get().updateStockRef(l.productId, l.refId, +l.qty, { qty: -l.qty, amount: -l.total })
     })
     // Remove original cash movements (cleaner than adding reversal lines)
     const toDelete = get().cashMvts.filter(m => m.desc.includes(txId))
@@ -654,12 +676,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const snap = await getDocs(query(collection(db, COL.ventesComptoir), where('id', '==', txId)))
       await Promise.all(snap.docs.map(d => deleteDoc(d.ref)))
     }
-    // Reverse stock for already-sorted lines
-    const sorted = tx.sortedLines
-    tx.lines.forEach((l, i) => {
+    // Always restore stock — it was decremented at sale creation for all lines
+    tx.lines.forEach(l => {
       if (!l.productId || !l.refId) return
-      const wasSorted = sorted ? sorted[i] === true : false
-      if (wasSorted) get().updateStockRef(l.productId, l.refId, +l.qty, { qty: -l.qty, amount: -l.total })
+      get().updateStockRef(l.productId, l.refId, +l.qty, { qty: -l.qty, amount: -l.total })
     })
     // Delete associated cash movements
     const toDelete = get().cashMvts.filter(m => m.desc.includes(txId))
@@ -672,19 +692,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!client) return
     const total = Object.values(amounts).reduce((s, v) => s + v, 0)
     const modesUsed = CHANNELS.filter(ch => (amounts[ch] ?? 0) > 0).map(ch => ({ mode: ch, amount: amounts[ch] }))
+    // Track remaining per channel across multiple invoices (same pattern as payFourn)
+    const modeRem: Record<string, number> = {}
+    modesUsed.forEach(m => { modeRem[m.mode] = m.amount })
     let totalRem = total
 
     const updTxs = client.transactions.map(tx => {
       const due = tx.total - tx.paid
       if (due <= 0 || totalRem <= 0) return tx
       const pay = Math.min(due, totalRem); totalRem -= pay
-      const newModes = [...tx.payModes]
+      const newModes = tx.payModes.map(p => ({ ...p }))
+      let payRem = pay
       modesUsed.forEach(m => {
+        const avail = modeRem[m.mode] ?? 0
+        if (avail <= 0 || payRem <= 0) return
+        const share = Math.min(avail, payRem)
+        modeRem[m.mode] = avail - share
+        payRem -= share
         const ex = newModes.find(p => p.mode === m.mode)
-        if (ex) ex.amount += Math.min(m.amount, pay)
-        else newModes.push({ mode: m.mode, amount: Math.min(m.amount, pay) })
+        if (ex) ex.amount += share
+        else newModes.push({ mode: m.mode, amount: share })
       })
-      return { ...tx, paid: tx.paid + pay, payModes: newModes }
+      const creditEntry = newModes.find(p => p.mode === 'Crédit')
+      if (creditEntry) creditEntry.amount = Math.max(0, creditEntry.amount - pay)
+      return { ...tx, paid: tx.paid + pay, payModes: newModes.filter(p => p.amount > 0) }
     })
 
     const newPay: ClientPaymentRec = { date: todayStr(), desc: note, amount: total, modes: modesUsed }
@@ -704,12 +735,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addClientAvance: async (clientId, mvt) => {
     const client = get().clients.find(c => c.id === clientId)
-    if (!client) return
+    if (!client) return ''
     const newMvt: AvanceMvt = { ...mvt, id: genId() }
     const updated = { ...client, avances: [...(client.avances ?? []), newMvt] }
     set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
     await saveClient(updated)
-    // Only versement physically leaves the till — depot/achat/facture are off-register
     if (mvt.type === 'versement' && mvt.modes.length > 0) {
       await get().addCashMvt({
         date: mvt.date, time: mvt.time,
@@ -719,22 +749,44 @@ export const useAppStore = create<AppState>((set, get) => ({
         modes: mvt.modes,
       })
     }
+    return newMvt.id
   },
 
   updateClientAvance: async (clientId, mvt) => {
     const client = get().clients.find(c => c.id === clientId)
     if (!client) return
+    const oldMvt = (client.avances ?? []).find(a => a.id === mvt.id)
     const updated = { ...client, avances: (client.avances ?? []).map(a => a.id === mvt.id ? mvt : a) }
     set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
     await saveClient(updated)
+    // Sync cashMvt if this is a versement (amount or modes may have changed)
+    if (oldMvt?.type === 'versement') {
+      const cashMvt = get().cashMvts.find(m =>
+        m.type === 'client' && m.dir === 'sortie' &&
+        m.date === oldMvt.date && m.time === oldMvt.time
+      )
+      if (cashMvt) await get().updateCashMvt({ ...cashMvt, montant: mvt.montant, modes: mvt.modes })
+    }
   },
 
   deleteClientAvance: async (clientId, mvtId) => {
     const client = get().clients.find(c => c.id === clientId)
     if (!client) return
+    const mvt = (client.avances ?? []).find(a => a.id === mvtId)
     const updated = { ...client, avances: (client.avances ?? []).filter(a => a.id !== mvtId) }
     set(s => ({ clients: s.clients.map(c => c.id === clientId ? updated : c) }))
     await saveClient(updated)
+    // Delete cashMvt for versement (don't go through deleteCashMvt which has unrelated reversal logic)
+    if (mvt?.type === 'versement') {
+      const cashMvt = get().cashMvts.find(m =>
+        m.type === 'client' && m.dir === 'sortie' &&
+        m.date === mvt.date && m.time === mvt.time
+      )
+      if (cashMvt) {
+        set(s => ({ cashMvts: s.cashMvts.filter(x => x.id !== cashMvt.id) }))
+        await deleteDoc(doc(db, COL.cashMvts, cashMvt.id))
+      }
+    }
   },
 
   // ── Cash ───────────────────────────────────────────────────────────────────
@@ -953,37 +1005,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   toggleTxLineSortie: async (txId, lineIdx) => {
-    const applyStockDelta = (tx: Tx, idx: number, nowSorted: boolean) => {
-      const l = tx.lines[idx]
-      if (!l?.productId || !l?.refId) return
-      if (nowSorted) {
-        get().updateStockRef(l.productId, l.refId, -l.qty, { qty: l.qty, amount: l.total })
-      } else {
-        get().updateStockRef(l.productId, l.refId, +l.qty, { qty: -l.qty, amount: -l.total })
-      }
-    }
-
-    // Try comptoir first
+    // Stock is now managed at addVente creation — this only tracks physical dispatch UI state
     const comptoir = get().ventesComptoir.find(t => t.id === txId)
     if (comptoir) {
       const sorted = [...(comptoir.sortedLines ?? comptoir.lines.map(() => false))]
-      const nowSorted = !sorted[lineIdx]
-      sorted[lineIdx] = nowSorted
-      applyStockDelta(comptoir, lineIdx, nowSorted)
+      sorted[lineIdx] = !sorted[lineIdx]
       set(s => ({ ventesComptoir: s.ventesComptoir.map(t => t.id === txId ? { ...t, sortedLines: sorted } : t) }))
       const snap = await getDocs(query(collection(db, COL.ventesComptoir), where('id', '==', txId)))
       if (!snap.empty) await updateDoc(snap.docs[0].ref, { sortedLines: sorted })
       return
     }
-    // Try client transactions
     for (const client of get().clients) {
       const txIdx = client.transactions.findIndex(t => t.id === txId)
       if (txIdx < 0) continue
       const tx = client.transactions[txIdx]
       const sorted = [...(tx.sortedLines ?? tx.lines.map(() => false))]
-      const nowSorted = !sorted[lineIdx]
-      sorted[lineIdx] = nowSorted
-      applyStockDelta(tx, lineIdx, nowSorted)
+      sorted[lineIdx] = !sorted[lineIdx]
       const updatedClient = {
         ...client,
         transactions: client.transactions.map((t, i) => i === txIdx ? { ...t, sortedLines: sorted } : t),
@@ -994,17 +1031,102 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  // ── Draft Invoices (Bons de sortie) ──────────────────────────────────────────
+  addDraftInvoice: async (data) => {
+    const ref = doc(collection(db, COL.draftInvoices))
+    const draft: DraftInvoice = { ...data, id: ref.id }
+    set(s => ({ draftInvoices: [draft, ...s.draftInvoices] }))
+    await setDoc(ref, { ...data, createdAt: serverTimestamp() })
+    return ref.id
+  },
+
+  toggleDraftLine: async (draftId, lineIdx) => {
+    const draft = get().draftInvoices.find(d => d.id === draftId)
+    if (!draft) return
+    const lines = draft.lines.map((l, i) => i === lineIdx ? { ...l, picked: !l.picked } : l)
+    set(s => ({ draftInvoices: s.draftInvoices.map(d => d.id === draftId ? { ...d, lines } : d) }))
+    await updateDoc(doc(db, COL.draftInvoices, draftId), { lines })
+  },
+
+  validateDraftInvoice: async (draftId) => {
+    const draft = get().draftInvoices.find(d => d.id === draftId)
+    if (!draft) return
+
+    // Generate sequential invoice ID (same counter as addVente)
+    const _d = new Date()
+    const yymmdd = _d.getFullYear().toString().slice(2) + String(_d.getMonth()+1).padStart(2,'0') + String(_d.getDate()).padStart(2,'0')
+    const counterRef = doc(db, COL.settings, `counter-${yymmdd}`)
+    let seq = 1
+    await runTransaction(db, async (t) => {
+      const snap = await t.get(counterRef)
+      seq = snap.exists() ? (snap.data().seq as number) + 1 : 1
+      t.set(counterRef, { seq })
+    })
+    const txId = `F-${yymmdd}-${seq}`
+
+    // Build Tx from draft and save to the right collection
+    const txLines: TxLine[] = draft.lines.map(l => ({
+      desc: l.desc, productName: l.productName, qty: l.qty, pu: l.pu, total: l.total,
+      productId: l.productId, refId: l.refId,
+    }))
+    const newTx: Tx = {
+      id: txId, date: todayStr(), time: nowTime(),
+      total: draft.total, paid: draft.paid,
+      lines: txLines, payModes: draft.payModes,
+      sortedLines: draft.lines.map(l => l.picked),
+    }
+    if (draft.clientId) {
+      const client = get().clients.find(c => c.id === draft.clientId)
+      if (client) {
+        const updated = { ...client, transactions: [newTx, ...client.transactions] }
+        set(s => ({ clients: s.clients.map(c => c.id === draft.clientId ? updated : c) }))
+        await saveClient(updated)
+      }
+    } else {
+      set(s => ({ ventesComptoir: [newTx, ...s.ventesComptoir] }))
+      await addDoc(collection(db, COL.ventesComptoir), { ...newTx, createdAt: serverTimestamp() })
+    }
+
+    // Decrement stock for all lines (validate = physical dispatch of entire order)
+    for (const l of draft.lines) {
+      if (l.productId && l.refId) {
+        get().updateStockRef(l.productId, l.refId, -l.qty, { qty: l.qty, amount: l.total })
+      }
+    }
+
+    // Cash movement for paid portion
+    const cashModes = draft.payModes.filter(m => m.mode !== 'Crédit' && m.mode !== 'Avance' && m.amount > 0)
+    if (cashModes.length > 0) {
+      const clientName = draft.clientName ? ` — ${draft.clientName}` : ''
+      await get().addCashMvt({
+        date: todayStr(), time: nowTime(),
+        type: 'vente', dir: 'entree',
+        desc: `Vente ${txId}${clientName}`,
+        cat: 'Vente POS',
+        montant: cashModes.reduce((s, m) => s + m.amount, 0),
+        modes: cashModes,
+      })
+    }
+
+    set(s => ({ draftInvoices: s.draftInvoices.filter(d => d.id !== draftId) }))
+    await deleteDoc(doc(db, COL.draftInvoices, draftId))
+  },
+
+  deleteDraftInvoice: async (draftId) => {
+    set(s => ({ draftInvoices: s.draftInvoices.filter(d => d.id !== draftId) }))
+    await deleteDoc(doc(db, COL.draftInvoices, draftId))
+  },
+
   recalculateStockFromSortie: async () => {
     const { ventesComptoir, clients, products } = get()
 
-    // Accumulate sorted qty+amount per (productId, refId) across all transactions
+    // Accumulate sold qty+amount per (productId, refId) across ALL transactions
+    // Stock is now decremented at sale creation so we count all lines, not just sorted ones
     const sortieMap = new Map<string, { qty: number; amount: number }>()
     const allTxs = [...ventesComptoir, ...clients.flatMap(c => c.transactions)]
     for (const tx of allTxs) {
-      tx.lines.forEach((l, i) => {
+      tx.lines.forEach(l => {
         if (!l.productId || !l.refId) return
-        const isSorted = tx.sortedLines === undefined ? true : tx.sortedLines[i] === true
-        if (!isSorted) return
         const key = `${l.productId}__${l.refId}`
         const prev = sortieMap.get(key) ?? { qty: 0, amount: 0 }
         sortieMap.set(key, { qty: prev.qty + l.qty, amount: prev.amount + l.total })
@@ -1033,19 +1155,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   validateTxSortie: async (txId) => {
-    // Toggle each unsorted line — applyStockDelta inside toggleTxLineSortie handles stock
     const comptoir = get().ventesComptoir.find(t => t.id === txId)
-    const tx = comptoir ?? (() => {
-      for (const c of get().clients) {
-        const t = c.transactions.find(t => t.id === txId)
-        if (t) return t
+    if (comptoir) {
+      const sortedLines = comptoir.lines.map(() => true)
+      set(s => ({ ventesComptoir: s.ventesComptoir.map(t => t.id === txId ? { ...t, sortedLines } : t) }))
+      const snap = await getDocs(query(collection(db, COL.ventesComptoir), where('id', '==', txId)))
+      if (!snap.empty) await updateDoc(snap.docs[0].ref, { sortedLines })
+      return
+    }
+    for (const client of get().clients) {
+      const txIdx = client.transactions.findIndex(t => t.id === txId)
+      if (txIdx < 0) continue
+      const tx = client.transactions[txIdx]
+      const sortedLines = tx.lines.map(() => true)
+      const updatedClient = {
+        ...client,
+        transactions: client.transactions.map((t, i) => i === txIdx ? { ...t, sortedLines } : t),
       }
-      return null
-    })()
-    if (!tx) return
-    const sorted = tx.sortedLines ?? tx.lines.map(() => false)
-    for (let i = 0; i < tx.lines.length; i++) {
-      if (!sorted[i]) await get().toggleTxLineSortie(txId, i)
+      set(s => ({ clients: s.clients.map(c => c.id === client.id ? updatedClient : c) }))
+      await saveClient(updatedClient)
+      return
     }
   },
 
@@ -1085,6 +1214,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     const updates = { lines, total, paid: newPaid, payModes: newPayModes }
+
+    // H4: Adjust stock for changed line quantities
+    if (existingTx) {
+      const oldQtyMap = new Map<string, { qty: number; pu: number }>()
+      for (const l of existingTx.lines) {
+        if (l.productId && l.refId) {
+          const k = `${l.productId}|${l.refId}`
+          const e = oldQtyMap.get(k)
+          if (e) e.qty += l.qty
+          else oldQtyMap.set(k, { qty: l.qty, pu: l.pu })
+        }
+      }
+      const newQtyMap = new Map<string, { qty: number; pu: number }>()
+      for (const l of lines) {
+        if (l.productId && l.refId) {
+          const k = `${l.productId}|${l.refId}`
+          const e = newQtyMap.get(k)
+          if (e) e.qty += l.qty
+          else newQtyMap.set(k, { qty: l.qty, pu: l.pu })
+        }
+      }
+      for (const k of new Set([...oldQtyMap.keys(), ...newQtyMap.keys()])) {
+        const [productId, refId] = k.split('|')
+        const oldQty = oldQtyMap.get(k)?.qty ?? 0
+        const newQty = newQtyMap.get(k)?.qty ?? 0
+        const delta = newQty - oldQty
+        if (delta !== 0) {
+          const pu = newQtyMap.get(k)?.pu ?? oldQtyMap.get(k)?.pu ?? 0
+          get().updateStockRef(productId, refId, -delta, { qty: delta, amount: delta * pu })
+        }
+      }
+    }
 
     if (clientId) {
       const client = get().clients.find(c => c.id === clientId)
@@ -1288,6 +1449,14 @@ export function initAppListeners() {
       .map(d => ({ ...d.data(), id: d.id } as DetteDiverse))
       .sort((a: any, b: any) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0))
     useAppStore.setState({ dettesDiverses })
+  }))
+
+  // Draft invoices (bons de sortie)
+  unsubs.push(onSnapshot(collection(db, COL.draftInvoices), snap => {
+    const draftInvoices = snap.docs
+      .map(d => ({ ...d.data(), id: d.id } as DraftInvoice))
+      .sort((a: any, b: any) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0))
+    useAppStore.setState({ draftInvoices })
   }))
 
   return () => unsubs.forEach(u => u())

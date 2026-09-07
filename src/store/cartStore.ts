@@ -17,6 +17,7 @@ interface CartState {
   setPaymentType:  (type: 'total' | 'partial' | 'credit') => void
   setChannel:      (mode: string, amount: number) => void
   clearCart:       () => void
+  syncStocks:      (getLiveStock: (productId: string, refId: string) => number) => void
 
   // Computed
   subtotal:        () => number
@@ -133,6 +134,22 @@ export const useCartStore = create<CartState>((set, get) => ({
       channels:    {},
     })
   },
+
+  syncStocks: (getLiveStock) =>
+    set((state) => {
+      let changed = false
+      const lines = state.lines.map((l) => {
+        if (!l.productId || !l.refId) return l
+        const liveStock = getLiveStock(l.productId, l.refId)
+        if (liveStock === l.stock) return l
+        changed = true
+        const cappedQty = Math.min(l.qty, Math.max(0, liveStock))
+        return { ...l, stock: liveStock, qty: cappedQty }
+      })
+      if (!changed) return {}
+      saveCart({ ...state, lines })
+      return { lines }
+    }),
 
   subtotal: () => {
     const { lines } = get()
