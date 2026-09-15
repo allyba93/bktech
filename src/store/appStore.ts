@@ -905,8 +905,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await setDoc(ref, { ...m, createdAt: serverTimestamp() })
     } catch (e) {
+      // Cette erreur était auparavant avalée, et le mouvement retiré du state
+      // local : la facture restait marquée payée pendant que l'encaissement
+      // disparaissait de la caisse, sans rien signaler. Des règlements ont été
+      // perdus ainsi (F-260915-4, F-260825-15).
+      //
+      // On ne retire plus l'écriture localement — le SDK Firestore met les
+      // écritures en file et les rejoue à la reconnexion, donc la supprimer
+      // ferait diverger l'affichage de ce qui finira réellement en base — et
+      // l'échec est propagé pour que l'appelant, et l'utilisateur, le voient.
       console.error('Cash mvt save error:', e)
-      set(s => ({ cashMvts: s.cashMvts.filter(x => x.id !== ref.id) }))
+      // Alerte directe plutôt que de compter sur l'appelant : une erreur
+      // propagée dans un gestionnaire d'évènement React se transforme en rejet
+      // de promesse silencieux, et l'utilisateur ne verrait rien — c'est
+      // exactement le problème qu'on corrige.
+      if (typeof window !== 'undefined') {
+        window.alert(
+          "⚠️ L'écriture en caisse n'a pas pu être enregistrée.\n\n" +
+          `Mouvement : ${m.desc} — ${m.montant} MRU\n\n` +
+          'La facture a bien été mise à jour, mais la caisse non. ' +
+          'Vérifiez votre connexion, puis ressaisissez ce mouvement pour que le solde soit juste.',
+        )
+      }
+      throw e
     }
   },
 
