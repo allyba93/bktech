@@ -1200,6 +1200,115 @@ export function ReportsPage() {
             </KpiCard>
           </div>
 
+          {/* ── Ventes par produit ── */}
+          {(() => {
+            const totQty  = dailyRefRows.reduce((s, r) => s + r.qty, 0)
+            const totCa   = dailyRefRows.reduce((s, r) => s + r.ca, 0)
+            const totPaid = dailyRefRows.reduce((s, r) => s + r.paid, 0)
+            const totCred = dailyRefRows.reduce((s, r) => s + r.credit, 0)
+            const totBen  = dailyRefRows.reduce((s, r) => s + r.benefice, 0)
+            const dateLabel = dailyGlobal
+              ? 'Toutes les ventes'
+              : new Date(dailyDate + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+            return (
+              <Card
+                title="Ventes par produit"
+                sub={
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setDailyGlobal(g => !g)}
+                      className={cn(
+                        'rounded-full border px-3 py-1 text-[11px] font-medium cursor-pointer transition-all',
+                        dailyGlobal
+                          ? 'border-[#1a1a18] bg-[#1a1a18] text-white'
+                          : 'border-black/[0.08] bg-[#f0efe9] text-[#6b6a66] hover:bg-[#e8e7e3]'
+                      )}>
+                      Global
+                    </button>
+                    {!dailyGlobal && (
+                      <input
+                        type="date"
+                        value={dailyDate}
+                        max={isoToday()}
+                        onChange={e => setDailyDate(e.target.value)}
+                        className="rounded-[7px] border border-black/[0.08] bg-[#f0efe9] px-2 py-1 text-[11px] outline-none focus:border-[#1a1a18] focus:bg-white cursor-pointer"
+                      />
+                    )}
+                  </div>
+                }
+                noPad>
+              <div className="px-4 pt-2 pb-1 text-[11px] text-[#a8a7a2]">{dateLabel}</div>
+                {dailyRefRows.length === 0 ? (
+                  <div className="flex h-24 items-center justify-center text-[13px] text-[#a8a7a2]">Aucune vente pour cette période</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-[12px]">
+                      <TblHead cols={[
+                        { label: 'Produit' },
+                        { label: 'Qté vendue', right: true },
+                        { label: 'Dispo', right: true },
+                        { label: 'CA Vente', right: true },
+                        { label: 'Payé', right: true },
+                        { label: 'Crédit', right: true },
+                        { label: 'Bénéfice', right: true },
+                      ]}/>
+                      <tbody>
+                        {dailyRefRows.map((r, i) => {
+                          const hasCredit  = r.credit > 0.5
+                          const noBenefice = r.benefice === 0
+                          const dispo = products.find(p => p.id === r.productId)
+                            ?.refs.reduce((s, ref) => s + ref.stock, 0) ?? null
+                          return (
+                            <tr key={i} className={cn('border-b border-black/[0.04] hover:bg-[#f8f7f3]', i % 2 !== 0 && 'bg-[#fafaf8]')}>
+                              <td className="px-4 py-2.5 font-medium text-[#111110]">{r.productName}</td>
+                              <td className="px-4 py-2.5 text-right font-mono font-medium">{fmt(r.qty)}</td>
+                              <td className="px-4 py-2.5 text-right font-mono">
+                                {dispo === null ? <span className="text-[#a8a7a2]">—</span> : (
+                                  <span className={dispo === 0 ? 'text-[#c0392b] font-semibold' : dispo <= 3 ? 'text-[#996600]' : 'text-[#111110]'}>
+                                    {fmt(dispo)}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 text-right font-mono text-[#1a7a4a]">{fmtM(r.ca)}</td>
+                              <td className="px-4 py-2.5 text-right font-mono text-[#1a5fa8]">{fmtM(Math.round(r.paid))}</td>
+                              <td className="px-4 py-2.5 text-right">
+                                {hasCredit
+                                  ? <span className="font-mono font-medium text-[#c0392b]">{fmtM(Math.round(r.credit))}</span>
+                                  : <span className="text-[#a8a7a2]">—</span>}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                {noBenefice
+                                  ? <span className="text-[#a8a7a2]">—</span>
+                                  : <span className={cn('font-mono font-semibold', r.benefice >= 0 ? 'text-[#1a7a4a]' : 'text-[#c0392b]')}>
+                                      {r.benefice >= 0 ? '+' : ''}{fmtM(Math.round(r.benefice))}
+                                    </span>}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-black/[0.08] bg-[#f8f7f3] font-medium">
+                          <td className="px-4 py-2 text-[11px]">Total</td>
+                          <td className="px-4 py-2 text-right font-mono text-[11px]">{fmt(totQty)}</td>
+                          <td/>
+                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#1a7a4a]">{fmtM(totCa)}</td>
+                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#1a5fa8]">{fmtM(Math.round(totPaid))}</td>
+                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#c0392b]">{totCred > 0.5 ? fmtM(Math.round(totCred)) : '—'}</td>
+                          <td className="px-4 py-2 text-right font-mono text-[11px]">
+                            <span className={totBen >= 0 ? 'text-[#1a7a4a]' : 'text-[#c0392b]'}>
+                              {totBen !== 0 ? <>{totBen >= 0 ? '+' : ''}{fmtM(Math.round(totBen))}</> : '—'}
+                            </span>
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </Card>
+            )
+          })()}
+
           {/* ── Dépenses & Investissements — filtre jour / semaine / mois ── */}
           <Card
             title="Dépenses & Investissements"
@@ -1327,115 +1436,6 @@ export function ReportsPage() {
               </div>
             )}
           </Card>
-
-          {/* ── Ventes par produit ── */}
-          {(() => {
-            const totQty  = dailyRefRows.reduce((s, r) => s + r.qty, 0)
-            const totCa   = dailyRefRows.reduce((s, r) => s + r.ca, 0)
-            const totPaid = dailyRefRows.reduce((s, r) => s + r.paid, 0)
-            const totCred = dailyRefRows.reduce((s, r) => s + r.credit, 0)
-            const totBen  = dailyRefRows.reduce((s, r) => s + r.benefice, 0)
-            const dateLabel = dailyGlobal
-              ? 'Toutes les ventes'
-              : new Date(dailyDate + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-            return (
-              <Card
-                title="Ventes par produit"
-                sub={
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setDailyGlobal(g => !g)}
-                      className={cn(
-                        'rounded-full border px-3 py-1 text-[11px] font-medium cursor-pointer transition-all',
-                        dailyGlobal
-                          ? 'border-[#1a1a18] bg-[#1a1a18] text-white'
-                          : 'border-black/[0.08] bg-[#f0efe9] text-[#6b6a66] hover:bg-[#e8e7e3]'
-                      )}>
-                      Global
-                    </button>
-                    {!dailyGlobal && (
-                      <input
-                        type="date"
-                        value={dailyDate}
-                        max={isoToday()}
-                        onChange={e => setDailyDate(e.target.value)}
-                        className="rounded-[7px] border border-black/[0.08] bg-[#f0efe9] px-2 py-1 text-[11px] outline-none focus:border-[#1a1a18] focus:bg-white cursor-pointer"
-                      />
-                    )}
-                  </div>
-                }
-                noPad>
-              <div className="px-4 pt-2 pb-1 text-[11px] text-[#a8a7a2]">{dateLabel}</div>
-                {dailyRefRows.length === 0 ? (
-                  <div className="flex h-24 items-center justify-center text-[13px] text-[#a8a7a2]">Aucune vente pour cette période</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full border-collapse text-[12px]">
-                      <TblHead cols={[
-                        { label: 'Produit' },
-                        { label: 'Qté vendue', right: true },
-                        { label: 'Dispo', right: true },
-                        { label: 'CA Vente', right: true },
-                        { label: 'Payé', right: true },
-                        { label: 'Crédit', right: true },
-                        { label: 'Bénéfice', right: true },
-                      ]}/>
-                      <tbody>
-                        {dailyRefRows.map((r, i) => {
-                          const hasCredit  = r.credit > 0.5
-                          const noBenefice = r.benefice === 0
-                          const dispo = products.find(p => p.id === r.productId)
-                            ?.refs.reduce((s, ref) => s + ref.stock, 0) ?? null
-                          return (
-                            <tr key={i} className={cn('border-b border-black/[0.04] hover:bg-[#f8f7f3]', i % 2 !== 0 && 'bg-[#fafaf8]')}>
-                              <td className="px-4 py-2.5 font-medium text-[#111110]">{r.productName}</td>
-                              <td className="px-4 py-2.5 text-right font-mono font-medium">{fmt(r.qty)}</td>
-                              <td className="px-4 py-2.5 text-right font-mono">
-                                {dispo === null ? <span className="text-[#a8a7a2]">—</span> : (
-                                  <span className={dispo === 0 ? 'text-[#c0392b] font-semibold' : dispo <= 3 ? 'text-[#996600]' : 'text-[#111110]'}>
-                                    {fmt(dispo)}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-4 py-2.5 text-right font-mono text-[#1a7a4a]">{fmtM(r.ca)}</td>
-                              <td className="px-4 py-2.5 text-right font-mono text-[#1a5fa8]">{fmtM(Math.round(r.paid))}</td>
-                              <td className="px-4 py-2.5 text-right">
-                                {hasCredit
-                                  ? <span className="font-mono font-medium text-[#c0392b]">{fmtM(Math.round(r.credit))}</span>
-                                  : <span className="text-[#a8a7a2]">—</span>}
-                              </td>
-                              <td className="px-4 py-2.5 text-right">
-                                {noBenefice
-                                  ? <span className="text-[#a8a7a2]">—</span>
-                                  : <span className={cn('font-mono font-semibold', r.benefice >= 0 ? 'text-[#1a7a4a]' : 'text-[#c0392b]')}>
-                                      {r.benefice >= 0 ? '+' : ''}{fmtM(Math.round(r.benefice))}
-                                    </span>}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t border-black/[0.08] bg-[#f8f7f3] font-medium">
-                          <td className="px-4 py-2 text-[11px]">Total</td>
-                          <td className="px-4 py-2 text-right font-mono text-[11px]">{fmt(totQty)}</td>
-                          <td/>
-                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#1a7a4a]">{fmtM(totCa)}</td>
-                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#1a5fa8]">{fmtM(Math.round(totPaid))}</td>
-                          <td className="px-4 py-2 text-right font-mono text-[11px] text-[#c0392b]">{totCred > 0.5 ? fmtM(Math.round(totCred)) : '—'}</td>
-                          <td className="px-4 py-2 text-right font-mono text-[11px]">
-                            <span className={totBen >= 0 ? 'text-[#1a7a4a]' : 'text-[#c0392b]'}>
-                              {totBen !== 0 ? <>{totBen >= 0 ? '+' : ''}{fmtM(Math.round(totBen))}</> : '—'}
-                            </span>
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                )}
-              </Card>
-            )
-          })()}
 
           {/* ── Chart + Modes ── */}
           <div className="grid gap-4 grid-cols-1 lg:grid-cols-[1fr_280px]">
