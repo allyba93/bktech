@@ -576,6 +576,24 @@ function VenduModal({ product, refId, onClose }: {
       .sort((a, b) => b.unpaidQty - a.unpaidQty || b.qty - a.qty)
   }, [history])
 
+  // Mêmes quantités, agrégées par jour — plus récent d'abord.
+  const byDayPaid = useMemo(() => {
+    const toIso = (d: string) => { const [dd, mm, yy] = d.split('/'); return `${yy}-${mm}-${dd}` }
+    const map = new Map<string, { qty: number; paidQty: number; clients: Set<string> }>()
+    history.forEach(e => {
+      const ratio = e.txTotal > 0 ? Math.min(1, e.txPaid / e.txTotal) : 0
+      const prev = map.get(e.date) ?? { qty: 0, paidQty: 0, clients: new Set<string>() }
+      prev.clients.add(e.clientName)
+      map.set(e.date, { qty: prev.qty + e.qty, paidQty: prev.paidQty + e.qty * ratio, clients: prev.clients })
+    })
+    return Array.from(map.entries())
+      .map(([date, v]) => {
+        const paidQty = Math.round(v.paidQty)
+        return { date, qty: v.qty, paidQty, unpaidQty: v.qty - paidQty, nbClients: v.clients.size }
+      })
+      .sort((a, b) => toIso(b.date).localeCompare(toIso(a.date)))
+  }, [history])
+
   const [tab, setTab] = useState<'list' | 'clients' | 'payment' | 'refs' | 'encaisse' | 'decompte'>('list')
 
   return (
@@ -872,7 +890,40 @@ function VenduModal({ product, refId, onClose }: {
                         )}
                       </div>
 
+                      {/* Résumé par jour — quantités seules */}
+                      <div className="border-b border-black/[0.08] bg-[#1a1a18] px-4 py-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-[.6px] text-white/70">Par jour</span>
+                      </div>
+                      {byDayPaid.map((d, i) => {
+                        const pct = d.qty > 0 ? Math.round(d.paidQty / d.qty * 100) : 100
+                        return (
+                          <div key={d.date} className={cn('flex items-center gap-3 border-b border-black/[0.05] px-4 py-2', i % 2 === 0 ? 'bg-white' : 'bg-[#fafaf8]')}>
+                            <div className="w-[88px] flex-shrink-0">
+                              <div className="font-mono text-[12px] font-semibold text-[#111110]">{d.date}</div>
+                              <div className="text-[9px] text-[#a8a7a2]">{d.nbClients} client{d.nbClients > 1 ? 's' : ''}</div>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#fdecea]">
+                                <div className="h-full rounded-full bg-[#1a7a4a]" style={{ width: `${pct}%` }}/>
+                              </div>
+                            </div>
+                            <div className="flex-shrink-0 text-right text-[11px]">
+                              <span className="font-mono font-semibold text-[#111110]">{fmt(d.qty)}</span>
+                              <span className="text-[#a8a7a2]"> · </span>
+                              <span className="font-mono font-semibold text-[#1a7a4a]">{fmt(d.paidQty)}</span>
+                              <span className="text-[#a8a7a2]"> · </span>
+                              <span className={cn('font-mono font-semibold', d.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>
+                                {d.unpaidQty > 0 ? fmt(d.unpaidQty) : '0'}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+
                       {/* Détail par client — quantités seules */}
+                      <div className="border-b border-black/[0.08] bg-[#1a1a18] px-4 py-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-[.6px] text-white/70">Tous les clients</span>
+                      </div>
                       {byClientPaid.map((c, i) => {
                         const pct = c.qty > 0 ? Math.round(c.paidQty / c.qty * 100) : 100
                         return (
