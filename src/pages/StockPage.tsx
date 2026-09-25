@@ -579,17 +579,22 @@ function VenduModal({ product, refId, onClose }: {
   // Mêmes quantités, agrégées par jour — plus récent d'abord.
   const byDayPaid = useMemo(() => {
     const toIso = (d: string) => { const [dd, mm, yy] = d.split('/'); return `${yy}-${mm}-${dd}` }
-    const map = new Map<string, { qty: number; paidQty: number; clients: Set<string> }>()
+    const map = new Map<string, { qty: number; paidQty: number; paidAmt: number; clients: Set<string> }>()
     history.forEach(e => {
       const ratio = e.txTotal > 0 ? Math.min(1, e.txPaid / e.txTotal) : 0
-      const prev = map.get(e.date) ?? { qty: 0, paidQty: 0, clients: new Set<string>() }
+      const prev = map.get(e.date) ?? { qty: 0, paidQty: 0, paidAmt: 0, clients: new Set<string>() }
       prev.clients.add(e.clientName)
-      map.set(e.date, { qty: prev.qty + e.qty, paidQty: prev.paidQty + e.qty * ratio, clients: prev.clients })
+      map.set(e.date, {
+        qty:     prev.qty     + e.qty,
+        paidQty: prev.paidQty + e.qty   * ratio,
+        paidAmt: prev.paidAmt + e.total * ratio,
+        clients: prev.clients,
+      })
     })
     return Array.from(map.entries())
       .map(([date, v]) => {
         const paidQty = Math.round(v.paidQty)
-        return { date, qty: v.qty, paidQty, unpaidQty: v.qty - paidQty, nbClients: v.clients.size }
+        return { date, qty: v.qty, paidQty, unpaidQty: v.qty - paidQty, paidAmt: Math.round(v.paidAmt), nbClients: v.clients.size }
       })
       .sort((a, b) => toIso(b.date).localeCompare(toIso(a.date)))
   }, [history])
@@ -865,6 +870,7 @@ function VenduModal({ product, refId, onClose }: {
                   const tPaid   = byClientPaid.reduce((s, c) => s + c.paidQty, 0)
                   const tUnpaid = byClientPaid.reduce((s, c) => s + c.unpaidQty, 0)
                   const nbDoit  = byClientPaid.filter(c => c.unpaidQty > 0).length
+                  const tPaidAmt = byDayPaid.reduce((s, d) => s + d.paidAmt, 0)
                   return (
                     <>
                       {/* Récapitulatif produit — en pièces uniquement */}
@@ -877,6 +883,7 @@ function VenduModal({ product, refId, onClose }: {
                           <div className="rounded-[8px] bg-[#e8f5ee] px-2 py-2 text-center">
                             <div className="text-[9px] uppercase tracking-[.5px] text-[#1a7a4a]">Encaissées</div>
                             <div className="font-mono text-[15px] font-bold text-[#1a7a4a]">{fmt(tPaid)}</div>
+                            <div className="font-mono text-[10px] font-medium text-[#1a7a4a]">{fmtMRU(tPaidAmt)}</div>
                           </div>
                           <div className={cn('rounded-[8px] px-2 py-2 text-center', tUnpaid > 0 ? 'bg-[#fdecea]' : 'bg-[#f0efe9]')}>
                             <div className={cn('text-[9px] uppercase tracking-[.5px]', tUnpaid > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>Dues</div>
@@ -908,13 +915,16 @@ function VenduModal({ product, refId, onClose }: {
                               </div>
                             </div>
                             <div className="flex-shrink-0 text-right text-[11px]">
-                              <span className="font-mono font-semibold text-[#111110]">{fmt(d.qty)}</span>
-                              <span className="text-[#a8a7a2]"> · </span>
-                              <span className="font-mono font-semibold text-[#1a7a4a]">{fmt(d.paidQty)}</span>
-                              <span className="text-[#a8a7a2]"> · </span>
-                              <span className={cn('font-mono font-semibold', d.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>
-                                {d.unpaidQty > 0 ? fmt(d.unpaidQty) : '0'}
-                              </span>
+                              <div>
+                                <span className="font-mono font-semibold text-[#111110]">{fmt(d.qty)}</span>
+                                <span className="text-[#a8a7a2]"> · </span>
+                                <span className="font-mono font-semibold text-[#1a7a4a]">{fmt(d.paidQty)}</span>
+                                <span className="text-[#a8a7a2]"> · </span>
+                                <span className={cn('font-mono font-semibold', d.unpaidQty > 0 ? 'text-[#c0392b]' : 'text-[#a8a7a2]')}>
+                                  {d.unpaidQty > 0 ? fmt(d.unpaidQty) : '0'}
+                                </span>
+                              </div>
+                              <div className="font-mono text-[10px] text-[#1a7a4a]">{fmtMRU(d.paidAmt)}</div>
                             </div>
                           </div>
                         )
